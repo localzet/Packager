@@ -50,7 +50,7 @@ try {
     }
 
     $artifact = (new BuildCommand())->run($manifest);
-    fwrite(STDOUT, "Built {$artifact['binary']}\nSHA-256 {$artifact['sha256']}\n");
+    fwrite(STDOUT, "Built {$artifact['binary']}\nSHA-256 {$artifact['sha256']}\nSBOM {$artifact['sbom']}\nSBOM SHA-256 {$artifact['sbom_sha256']}\n");
 } catch (Throwable $exception) {
     fwrite(STDERR, 'Error: ' . $exception->getMessage() . "\n");
     exit(1);

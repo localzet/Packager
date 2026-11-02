@@ -43,7 +43,7 @@ final class BuildCommand
         }
     }
 
-    /** @return array{binary:string,sha256:string,manifest:string} */
+    /** @return array{binary:string,sha256:string,manifest:string,sbom:string,sbom_sha256:string} */
     public function run(Manifest $manifest): array
     {
         if (!class_exists(Phar::class) || !extension_loaded('phar')) {
@@ -52,7 +52,10 @@ final class BuildCommand
         if (file_exists($manifest->outputPath()) && is_dir($manifest->outputPath())) {
             throw new RuntimeException('Output path must name the executable file.');
         }
-        if (file_exists($manifest->outputPath()) || file_exists($manifest->outputPath() . '.manifest.json')) {
+        if (file_exists($manifest->outputPath())
+            || file_exists($manifest->outputPath() . '.manifest.json')
+            || file_exists($manifest->outputPath() . '.spdx.json')
+        ) {
             throw new RuntimeException('Refusing to overwrite an existing artifact or its metadata.');
         }
         $this->assertToolchainVersion($manifest);
@@ -89,28 +92,42 @@ final class BuildCommand
                 'php_version' => $runtime['php'],
                 'extensions' => $runtime['extensions'],
                 'required_extensions' => $manifest->extensions(),
-            'toolchain' => ['static-php-cli' => $manifest->toolchainVersion(), 'process_timeout_seconds' => $this->processTimeoutSeconds],
+                'toolchain' => ['static-php-cli' => $manifest->toolchainVersion(), 'process_timeout_seconds' => $this->processTimeoutSeconds],
                 'micro_sha256' => $microHash,
                 'composer_lock_sha256' => $manifest->composerLockHash(),
                 'artifact' => ['name' => basename($target), 'sha256' => $hash],
             ];
             $metadataPath = $target . '.manifest.json';
+            $sbomPath = $target . '.spdx.json';
             $metadataTemp = $temporaryDirectory . DIRECTORY_SEPARATOR . 'artifact.manifest.json';
+            $sbomTemp = $temporaryDirectory . DIRECTORY_SEPARATOR . 'artifact.spdx.json';
+            $sbom = (new SpdxSbom())->encode($manifest, $target, $hash);
+            $sbomHash = hash('sha256', $sbom);
+            $metadata['sbom'] = ['name' => basename($sbomPath), 'sha256' => $sbomHash, 'format' => 'SPDX-2.3'];
             if (file_put_contents($metadataTemp, json_encode($metadata, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n", LOCK_EX) === false) {
                 throw new RuntimeException('Cannot write artifact metadata.');
             }
+            if (file_put_contents($sbomTemp, $sbom, LOCK_EX) === false) {
+                throw new RuntimeException('Cannot write SPDX SBOM.');
+            }
 
-            if (!rename($binaryPath, $target)) {
-                throw new RuntimeException("Cannot publish executable to {$target}.");
+            if (!rename($sbomTemp, $sbomPath)) {
+                throw new RuntimeException("Cannot publish SPDX SBOM to {$sbomPath}.");
             }
             if (!rename($metadataTemp, $metadataPath)) {
-                @unlink($target);
+                @unlink($sbomPath);
                 throw new RuntimeException("Cannot publish artifact metadata to {$metadataPath}.");
+            }
+            if (!rename($binaryPath, $target)) {
+                @unlink($metadataPath);
+                @unlink($sbomPath);
+                throw new RuntimeException("Cannot publish executable to {$target}.");
             }
             chmod($target, 0755);
             chmod($metadataPath, 0644);
+            chmod($sbomPath, 0644);
 
-            return ['binary' => $target, 'sha256' => $hash, 'manifest' => $metadataPath];
+            return ['binary' => $target, 'sha256' => $hash, 'manifest' => $metadataPath, 'sbom' => $sbomPath, 'sbom_sha256' => $sbomHash];
         } finally {
             $this->removeTree($temporaryDirectory);
         }

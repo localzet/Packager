@@ -43,13 +43,13 @@ php bin/localzet-packager validate packager.json
 php -d phar.readonly=0 bin/localzet-packager build packager.json
 ```
 
-Build writes an executable and a neighboring JSON metadata file with the target, probed PHP version, loaded and required extensions, toolchain version, micro runtime hash, Composer lock hash where applicable, and artifact hash. The CLI temporarily appends a capability probe to a copy of `micro.sfx` and checks that the runtime can execute it before packaging. Child processes have a 300-second timeout recorded in metadata.
+Build writes an executable, a neighboring JSON metadata file, and an SPDX 2.3 SBOM (`<artifact>.spdx.json`). The SBOM describes the application and production packages from `composer.lock`, adds Composer PURLs and known dependency relationships, and uses `NOASSERTION` for unverified license data. It is a lockfile-based inventory, not an independent source analysis. Metadata records hashes for the artifact, SBOM, micro runtime, and Composer lockfile where applicable. The CLI temporarily appends a capability probe to a copy of `micro.sfx` and checks that the runtime can execute it before packaging. Child processes have a 300-second timeout recorded in metadata.
 
 ## Limits
 
 - A prebuilt `micro.sfx` is required; Packager does not compile PHP.
 - `.git`, IDE settings, `node_modules`, `.env*`, `auth.json` and `composer-auth.json` are excluded. Other project files, including tests, may be packaged.
 - Existing `vendor/` contents are included after Composer metadata checks. Only package trusted source and production dependencies.
-- SBOM, signatures, attestations, activation, license enforcement and reproducible independent builds are not implemented.
+- SBOM generation is implemented; artifact and SBOM signatures, provenance attestations, independent SPDX validation, activation, license enforcement and reproducible independent builds are not implemented.
 - PHAR and micro SAPI do not encrypt PHP source or prevent reverse engineering.
 - Only Linux x86-64 has a real Server runtime acceptance report. TLS, ARM64 and clean-host compatibility have not been verified.

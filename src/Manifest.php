@@ -43,6 +43,12 @@ final class Manifest
     private string $toolchainVersion;
     private string $outputPath;
     private ?string $composerLockHash;
+    private string $projectName;
+    private ?string $projectVersion;
+    /** @var list<array<string, mixed>> */
+    private array $composerPackages;
+    /** @var array<string, string> */
+    private array $projectRequirements;
 
     /** @param list<string> $extensions */
     private function __construct(
@@ -57,6 +63,10 @@ final class Manifest
         string $toolchainVersion,
         string $outputPath,
         ?string $composerLockHash,
+        string $projectName,
+        ?string $projectVersion,
+        array $composerPackages,
+        array $projectRequirements,
     ) {
         $this->manifestPath = $manifestPath;
         $this->projectRoot = $projectRoot;
@@ -69,6 +79,10 @@ final class Manifest
         $this->toolchainVersion = $toolchainVersion;
         $this->outputPath = $outputPath;
         $this->composerLockHash = $composerLockHash;
+        $this->projectName = $projectName;
+        $this->projectVersion = $projectVersion;
+        $this->composerPackages = $composerPackages;
+        $this->projectRequirements = $projectRequirements;
     }
 
     public static function load(string $path): self
@@ -129,7 +143,7 @@ final class Manifest
         if (preg_match('/^\d+\.\d+\.\d+$/', $phpVersion) !== 1) {
             throw new InvalidArgumentException('php_version must use an exact major.minor.patch version.');
         }
-        $composerLockHash = self::validateComposerProject($projectRoot);
+        $composer = self::validateComposerProject($projectRoot);
         $outputPath = self::resolveOutput($manifestDir, self::requiredString($data, 'output'));
         if (self::isWithin($outputPath, $projectRoot)) {
             throw new InvalidArgumentException('Build output must be outside the packaged project tree.');
@@ -146,7 +160,11 @@ final class Manifest
             $microPath,
             $toolchainVersion,
             $outputPath,
-            $composerLockHash,
+            $composer['hash'],
+            $composer['name'],
+            $composer['version'],
+            $composer['packages'],
+            $composer['requirements'],
         );
     }
 
@@ -162,12 +180,19 @@ final class Manifest
     public function toolchainVersion(): string { return $this->toolchainVersion; }
     public function outputPath(): string { return $this->outputPath; }
     public function composerLockHash(): ?string { return $this->composerLockHash; }
+    public function projectName(): string { return $this->projectName; }
+    public function projectVersion(): ?string { return $this->projectVersion; }
+    /** @return list<array<string, mixed>> */
+    public function composerPackages(): array { return $this->composerPackages; }
+    /** @return array<string, string> */
+    public function projectRequirements(): array { return $this->projectRequirements; }
 
-    private static function validateComposerProject(string $root): ?string
+    /** @return array{hash:?string,name:string,version:?string,packages:list<array<string,mixed>>,requirements:array<string,string>} */
+    private static function validateComposerProject(string $root): array
     {
         $composerJson = $root . DIRECTORY_SEPARATOR . 'composer.json';
         if (!is_file($composerJson)) {
-            return null;
+            return ['hash' => null, 'name' => basename($root), 'version' => null, 'packages' => [], 'requirements' => []];
         }
         $lockPath = $root . DIRECTORY_SEPARATOR . 'composer.lock';
         $autoloadPath = $root . DIRECTORY_SEPARATOR . 'vendor/autoload.php';
@@ -184,6 +209,15 @@ final class Manifest
         }
         if (!is_array($projectConfig) || !is_array($lock) || !is_array($installed)) {
             throw new InvalidArgumentException('Composer lock and installed package metadata must be JSON objects.');
+        }
+        $requirements = $projectConfig['require'] ?? [];
+        if (!is_array($requirements)) {
+            throw new InvalidArgumentException('Composer require must be an object of package constraints.');
+        }
+        foreach ($requirements as $name => $constraint) {
+            if (!is_string($name) || !is_string($constraint)) {
+                throw new InvalidArgumentException('Composer require entries must map package names to constraints.');
+            }
         }
         if (is_array($installed) && array_key_exists('dev', $installed) && $installed['dev'] === true) {
             throw new InvalidArgumentException('Vendor tree was installed with development dependencies; use a production Composer install.');
@@ -225,7 +259,13 @@ final class Manifest
             $missing = array_key_first(array_diff_key($lockedByName, $installedByName));
             throw new InvalidArgumentException("Locked Composer package is missing from the installed vendor tree: {$missing}");
         }
-        return hash_file('sha256', $lockPath) ?: throw new RuntimeException('Cannot hash composer.lock.');
+        return [
+            'hash' => hash_file('sha256', $lockPath) ?: throw new RuntimeException('Cannot hash composer.lock.'),
+            'name' => is_string($projectConfig['name'] ?? null) ? $projectConfig['name'] : basename($root),
+            'version' => is_string($projectConfig['version'] ?? null) ? $projectConfig['version'] : null,
+            'packages' => array_values($lockedByName),
+            'requirements' => $requirements,
+        ];
     }
 
     /** @param list<mixed> $packages @return array<string, array<string, mixed>> */

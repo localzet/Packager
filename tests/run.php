@@ -42,10 +42,10 @@ mkdir($root . '/project/vendor/composer', 0700, true);
 mkdir($root . '/output', 0700);
 file_put_contents($root . '/project/server.php', "<?php echo 'packaged-ok';\n");
 file_put_contents($root . '/project/.env', "SECRET=must-not-be-packaged\n");
-file_put_contents($root . '/project/composer.json', '{"name":"fixture/application","require":{}}');
-file_put_contents($root . '/project/composer.lock', '{"packages":[{"name":"fixture/runtime","version":"1.0.0"}],"packages-dev":[]}');
+file_put_contents($root . '/project/composer.json', '{"name":"fixture/application","require":{"fixture/runtime":"1.0.0"}}');
+file_put_contents($root . '/project/composer.lock', '{"packages":[{"name":"fixture/runtime","version":"1.0.0","require":{"fixture/transitive":"^1.0"}},{"name":"fixture/transitive","version":"1.2.0"}],"packages-dev":[]}');
 file_put_contents($root . '/project/vendor/autoload.php', "<?php\n");
-file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false}]}');
+file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false},{"name":"fixture/transitive","version":"1.2.0","dev_requirement":false}]}');
 $fakeRuntime = json_encode(['php' => PHP_VERSION, 'extensions' => ['phar', 'pcntl', 'posix', 'sockets']], JSON_THROW_ON_ERROR);
 file_put_contents($root . '/micro.sfx', "#!/bin/sh\necho 'LOCALZET_PACKAGER_RUNTIME={$fakeRuntime}'\nexit 0\n");
 chmod($root . '/micro.sfx', 0700);
@@ -87,6 +87,14 @@ try {
     $metadata = json_decode((string)file_get_contents($result['manifest']), true, 16, JSON_THROW_ON_ERROR);
     expect($metadata['artifact']['sha256'] === $result['sha256'], 'Artifact manifest hash does not match.');
     expect($metadata['composer_lock_sha256'] === hash_file('sha256', $root . '/project/composer.lock'), 'Composer lockfile hash was not recorded.');
+    expect(is_file($result['sbom']), 'Builder did not produce an SPDX SBOM.');
+    expect(hash_file('sha256', $result['sbom']) === $metadata['sbom']['sha256'], 'SBOM SHA-256 does not match artifact metadata.');
+    $sbom = json_decode((string)file_get_contents($result['sbom']), true, 32, JSON_THROW_ON_ERROR);
+    expect($sbom['spdxVersion'] === 'SPDX-2.3', 'SBOM uses an unexpected SPDX version.');
+    expect($sbom['documentDescribes'] === ['SPDXRef-Application'], 'SBOM does not identify its described application package.');
+    expect($sbom['packages'][1]['externalRefs'][0]['referenceLocator'] === 'pkg:composer/fixture/runtime@1.0.0', 'SBOM is missing the Composer package URL.');
+    expect(in_array(['spdxElementId' => 'SPDXRef-Application', 'relationshipType' => 'DEPENDS_ON', 'relatedSpdxElement' => $sbom['packages'][1]['SPDXID']], $sbom['relationships'], true), 'SBOM is missing the application dependency relationship.');
+    expect(in_array(['spdxElementId' => $sbom['packages'][1]['SPDXID'], 'relationshipType' => 'DEPENDS_ON', 'relatedSpdxElement' => $sbom['packages'][2]['SPDXID']], $sbom['relationships'], true), 'SBOM is missing the transitive dependency relationship.');
 
     $phar = new Phar($result['binary']);
     expect($phar->offsetExists('server.php'), 'Packaged archive is missing its entrypoint.');
@@ -110,14 +118,14 @@ try {
         expect(str_contains($exception->getMessage(), 'missing declared extensions'), 'Builder failed for an unexpected reason.');
     }
 
-    file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"2.0.0","dev_requirement":false}]}');
+    file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"2.0.0","dev_requirement":false},{"name":"fixture/transitive","version":"1.2.0","dev_requirement":false}]}');
     try {
         Manifest::load($root . '/packager.json');
         throw new RuntimeException('Manifest accepted an installed package version that differs from composer.lock.');
     } catch (InvalidArgumentException $exception) {
         expect(str_contains($exception->getMessage(), 'does not match composer.lock'), 'Composer lock mismatch failed for an unexpected reason.');
     }
-    file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false}]}');
+    file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false},{"name":"fixture/transitive","version":"1.2.0","dev_requirement":false}]}');
 
     file_put_contents($root . '/slow-spc', "#!/usr/bin/env php\n<?php usleep(5_000_000);\n");
     chmod($root . '/slow-spc', 0700);

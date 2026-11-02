@@ -27,7 +27,7 @@ The current Packager CLI was tested with a production-only dependency tree. Its 
 - TLS handshake and production certificate loading.
 - Clean-host run without system PHP libraries, plus ARM64 build/runtime.
 - Reproducible artifact hash across independent builders.
-- SBOM and artifact signature verification.
+- Independent SPDX SBOM validation and artifact signature verification (SBOM generation is implemented, but it has not yet been checked with an independent SPDX validator).
 - License activation, lease expiry/revocation and offline grace.
 
 Do not describe the packager as production-ready until these gates and the cases in [architecture readiness](architecture.md#delivery-stages-and-readiness) pass.

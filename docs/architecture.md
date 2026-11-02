@@ -4,7 +4,7 @@
 
 Реализован CLI для одной цели: Linux x86-64. Он проверяет manifest, готовые production-зависимости Composer и runtime `micro.sfx`, создаёт PHAR и запускает static-php-cli для объединения файлов. Metadata содержит хеш артефакта, `micro.sfx` и `composer.lock`, версию PHP, список загруженных и обязательных расширений, target и версию toolchain. Подробности фактического прогона приведены в [отчёте о совместимости](compatibility-spike.md).
 
-Генерация SBOM, подпись и подтверждение происхождения сборки, online-активация и доставка обновлений пока не реализованы. Вызовы дочерних процессов ограничены таймаутом 300 секунд. Остальные разделы этого документа описывают целевую архитектуру и этапы, а не существующие возможности CLI.
+Генерация SPDX 2.3 SBOM по production Composer lockfile реализована; он включает приложение, известные пакеты и SHA-256 артефакта, а metadata содержит SHA-256 SBOM. Неподтверждённые данные о лицензиях передаются как `NOASSERTION`. Подпись и подтверждение происхождения сборки, online-активация и доставка обновлений пока не реализованы. Вызовы дочерних процессов ограничены таймаутом 300 секунд. Остальные разделы этого документа описывают целевую архитектуру и этапы, а не существующие возможности CLI.
 
 ## Бизнес-контекст
 
@@ -45,7 +45,7 @@ flowchart TB
 
 ## Application / data
 
-Build input manifest records project root, entrypoint, target OS/architecture, PHP version and explicit extensions. The current CLI does not resolve Composer dependencies: the operator installs production dependencies beforehand, and the builder checks the installed tree against its metadata and lockfile. Current output metadata records tool versions, runtime version and loaded extensions, extension requirements, target and SHA-256 hashes. It does not yet produce a dependency inventory, SBOM, source revision, signature or provenance attestation. Do not store secrets or user credentials in manifest/SBOM.
+Build input manifest records project root, entrypoint, target OS/architecture, PHP version and explicit extensions. The current CLI does not resolve Composer dependencies: the operator installs production dependencies beforehand, and the builder checks the installed tree against its metadata and lockfile. Current output metadata records tool versions, runtime version and loaded extensions, extension requirements, target and SHA-256 hashes. The builder emits an SPDX 2.3 SBOM from the validated production Composer lockfile with Composer PURLs and known dependency relationships; uncertain license information is `NOASSERTION`. It does not yet produce a source revision, signature or provenance attestation. Do not store secrets or user credentials in manifest/SBOM.
 
 The planned license lease is a versioned signed payload with product, artifact/customer binding, expiry, key id and optional revocation epoch. Signature verification uses an embedded public key; the client stores leases atomically with least-privilege filesystem permissions. Online activation with periodic revalidation and up to seven days of offline operation after the last successful check are approved product requirements. Revalidation frequency, activation protocol and privacy/retention terms remain undecided. The license client and service are not implemented.
 
@@ -72,7 +72,7 @@ Chosen direction: online activation with periodic revalidation and up to seven d
 ## Delivery stages and readiness
 
 1. Toolchain compatibility spike: x86-64 Server 7 build, PHP/extensions probe, two-worker HTTP and SIGINT have passed locally. Clean-host libraries, ARM64, TLS and network/proxy behavior are open.
-2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact and hashes are implemented. SBOM and independent artifact verification are open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
+2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact, SPDX 2.3 SBOM and hashes are implemented. Independent SPDX and artifact verification are open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
 3. Signed provenance: verify signature/hash tamper rejection and reproducible build properties where toolchain permits.
 4. License client protocol: mock activation, valid/expired/revoked/tampered lease, timeout, retry, offline grace, clock rollback and atomic cache tests.
 5. Release: Linux x86-64 and ARM64 artifacts, clean-host smoke, CI matrix, docs, support/rollback runbook and explicit legal review of binary distribution terms.
