@@ -29,22 +29,46 @@ use InvalidArgumentException;
 use JsonException;
 use RuntimeException;
 
-final readonly class Manifest
+final class Manifest
 {
+    private string $manifestPath;
+    private string $projectRoot;
+    private string $entrypoint;
+    private string $target;
+    private string $phpVersion;
+    /** @var list<string> */
+    private array $extensions;
+    private string $spcPath;
+    private string $microPath;
+    private string $toolchainVersion;
+    private string $outputPath;
+    private ?string $composerLockHash;
+
     /** @param list<string> $extensions */
     private function __construct(
-        private string $manifestPath,
-        private string $projectRoot,
-        private string $entrypoint,
-        private string $target,
-        private string $phpVersion,
-        private array $extensions,
-        private string $spcPath,
-        private string $microPath,
-        private string $toolchainVersion,
-        private string $outputPath,
-        private ?string $composerLockHash,
+        string $manifestPath,
+        string $projectRoot,
+        string $entrypoint,
+        string $target,
+        string $phpVersion,
+        array $extensions,
+        string $spcPath,
+        string $microPath,
+        string $toolchainVersion,
+        string $outputPath,
+        ?string $composerLockHash,
     ) {
+        $this->manifestPath = $manifestPath;
+        $this->projectRoot = $projectRoot;
+        $this->entrypoint = $entrypoint;
+        $this->target = $target;
+        $this->phpVersion = $phpVersion;
+        $this->extensions = $extensions;
+        $this->spcPath = $spcPath;
+        $this->microPath = $microPath;
+        $this->toolchainVersion = $toolchainVersion;
+        $this->outputPath = $outputPath;
+        $this->composerLockHash = $composerLockHash;
     }
 
     public static function load(string $path): self
