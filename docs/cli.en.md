@@ -45,11 +45,33 @@ php -d phar.readonly=0 bin/localzet-packager build packager.json
 
 Build writes an executable, a neighboring JSON metadata file, and an SPDX 2.3 SBOM (`<artifact>.spdx.json`). The SBOM describes the application and production packages from `composer.lock`, adds Composer PURLs and known dependency relationships, and uses `NOASSERTION` for unverified license data. It is a lockfile-based inventory, not an independent source analysis. Metadata records hashes for the artifact, SBOM, micro runtime, and Composer lockfile where applicable. The CLI temporarily appends a capability probe to a copy of `micro.sfx` and checks that the runtime can execute it before packaging. Child processes have a 300-second timeout recorded in metadata.
 
+## Sign and verify an artifact
+
+Generate a dedicated Ed25519 key pair. Existing files are never overwritten; the private key is created with mode `0600`:
+
+```sh
+php bin/localzet-packager keygen /secure/release.key /secure/release.pub
+```
+
+Keep the private key outside the source tree and build worker. Sign the executable and its neighboring `.manifest.json` and `.spdx.json` files:
+
+```sh
+php bin/localzet-packager sign ../dist/my-application /secure/release.key
+```
+
+This creates `my-application.sig.json` with an Ed25519 signature, key ID, and hashes for all three files. Verify the complete set using a public key delivered through a trusted channel:
+
+```sh
+php bin/localzet-packager verify ../dist/my-application /secure/trusted-release.pub
+```
+
+The public key is not included in the bundle and is not trusted automatically. A valid signature proves bundle integrity and possession of the matching private key; it does not establish source safety, key-owner authority, or build-environment provenance. Rotate a compromised key through the trusted distribution channel. Signing does not encrypt PHP source.
+
 ## Limits
 
 - A prebuilt `micro.sfx` is required; Packager does not compile PHP.
 - `.git`, IDE settings, `node_modules`, `.env*`, `auth.json` and `composer-auth.json` are excluded. Other project files, including tests, may be packaged.
 - Existing `vendor/` contents are included after Composer metadata checks. Only package trusted source and production dependencies.
-- SBOM generation is implemented; artifact and SBOM signatures, provenance attestations, independent SPDX validation, activation, license enforcement and reproducible independent builds are not implemented.
+- Ed25519 artifact signatures and integrity verification are implemented. Provenance attestations, independent SPDX validation, activation, license enforcement and reproducible independent builds are not implemented.
 - PHAR and micro SAPI do not encrypt PHP source or prevent reverse engineering.
 - Only Linux x86-64 has a real Server runtime acceptance report. TLS, ARM64 and clean-host compatibility have not been verified.

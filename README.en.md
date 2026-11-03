@@ -6,13 +6,13 @@ Localzet Packager builds standalone executables for Localzet Server and Triangle
 
 The CLI prototype targets `linux-x86_64`. It validates the manifest and Composer graph, packages project files into a PHAR, probes the PHP version and extensions exposed by `micro.sfx`, and combines the PHAR with the runtime through a pinned static-php-cli version. A standalone build of the current Server 7 source served HTTP through two worker processes and shut down cleanly on SIGINT. See the [compatibility report](docs/compatibility-spike.md) for hashes and evidence.
 
-Packager is not ready for broad use. Clean-host, ARM64, TLS, reproducible builds and independent artifact verification remain untested. SBOM generation, artifact signing, online activation and distributable releases are not implemented. PHAR and micro SAPI packaging do not prevent PHP source extraction.
+Packager is not ready for broad use. Clean-host, ARM64, TLS, reproducible builds and independent artifact verification remain untested. SBOM generation and Ed25519 artifact signing are implemented; online activation and distributable releases are not. PHAR and micro SAPI packaging do not prevent PHP source extraction.
 
 See the [Russian overview](README.md), [architecture](docs/architecture.en.md) and [CLI guide](docs/cli.en.md).
 
 ## Build requirements
 
-- PHP CLI with `json` and `phar` extensions.
+- PHP CLI with `json`, `phar` and `sodium` extensions.
 - A pinned static-php-cli 2.x executable and a matching `micro.sfx` runtime.
 - A project with its production `vendor/` tree already installed from `composer.lock`.
 
@@ -33,6 +33,16 @@ php -d phar.readonly=0 bin/localzet-packager build packager.json
 The manifest pins the project entrypoint, target, PHP version, extension list, static-php-cli path/version, micro runtime and output path. The builder checks the actual runtime version and loaded extensions. It excludes `.env*`, Composer auth files, VCS metadata, IDE settings and `node_modules`, and refuses to overwrite an existing artifact.
 
 Current limitations and the complete manifest reference are documented in [docs/cli.en.md](docs/cli.en.md).
+
+Sign and verify a release bundle with a separately trusted key:
+
+```sh
+php bin/localzet-packager keygen /secure/release.key /secure/release.pub
+php bin/localzet-packager sign ../dist/my-application /secure/release.key
+php bin/localzet-packager verify ../dist/my-application /secure/trusted-release.pub
+```
+
+The signature binds the executable, metadata and SBOM. Obtain the verification key through a trusted channel; a signature does not prove source safety or build provenance.
 
 ## Security
 

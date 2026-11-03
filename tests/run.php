@@ -25,6 +25,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use Localzet\Packager\ArtifactSignature;
 use Localzet\Packager\BuildCommand;
 use Localzet\Packager\Manifest;
 
@@ -33,6 +34,21 @@ function expect(bool $condition, string $message): void
     if (!$condition) {
         throw new RuntimeException($message);
     }
+}
+
+/** @param list<string> $arguments @return array{int,string} */
+function runCli(array $arguments): array
+{
+    $process = proc_open([PHP_BINARY, dirname(__DIR__) . '/bin/localzet-packager', ...$arguments], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    if (!is_resource($process)) {
+        throw new RuntimeException('Could not start Packager CLI test process.');
+    }
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($process), (string)$stdout . (string)$stderr];
 }
 
 $root = sys_get_temp_dir() . '/localzet-packager-test-' . bin2hex(random_bytes(6));
@@ -95,6 +111,67 @@ try {
     expect($sbom['packages'][1]['externalRefs'][0]['referenceLocator'] === 'pkg:composer/fixture/runtime@1.0.0', 'SBOM is missing the Composer package URL.');
     expect(in_array(['spdxElementId' => 'SPDXRef-Application', 'relationshipType' => 'DEPENDS_ON', 'relatedSpdxElement' => $sbom['packages'][1]['SPDXID']], $sbom['relationships'], true), 'SBOM is missing the application dependency relationship.');
     expect(in_array(['spdxElementId' => $sbom['packages'][1]['SPDXID'], 'relationshipType' => 'DEPENDS_ON', 'relatedSpdxElement' => $sbom['packages'][2]['SPDXID']], $sbom['relationships'], true), 'SBOM is missing the transitive dependency relationship.');
+
+    $signatures = new ArtifactSignature();
+    $privateKey = $root . '/release-private.key';
+    $publicKey = $root . '/release-public.key';
+    $keyId = $signatures->generateKeypair($privateKey, $publicKey);
+    expect((fileperms($privateKey) & 0077) === 0, 'Generated private key is accessible to group or other users.');
+    expect($keyId === hash('sha256', base64_decode(trim((string)file_get_contents($publicKey)), true)), 'Generated key ID does not match public key.');
+    $signaturePath = $signatures->sign($result['binary'], $privateKey);
+    expect($signaturePath === $result['binary'] . '.sig.json', 'Signature path has an unexpected name.');
+    $signatures->verify($result['binary'], $publicKey);
+    $artifactBytes = file_get_contents($result['binary']);
+    file_put_contents($result['binary'], (string)$artifactBytes . "tampered");
+    try {
+        $signatures->verify($result['binary'], $publicKey);
+        throw new RuntimeException('Signature verification accepted a modified executable.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'artifact_sha256'), 'Artifact tampering failed for an unexpected reason.');
+    }
+    file_put_contents($result['binary'], (string)$artifactBytes);
+    $sbomBytes = file_get_contents($result['sbom']);
+    file_put_contents($result['sbom'], (string)$sbomBytes . "tampered");
+    try {
+        $signatures->verify($result['binary'], $publicKey);
+        throw new RuntimeException('Signature verification accepted a modified SBOM.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'sbom_sha256'), 'SBOM tampering failed for an unexpected reason.');
+    }
+    file_put_contents($result['sbom'], (string)$sbomBytes);
+    $metadataBytes = file_get_contents($result['manifest']);
+    file_put_contents($result['manifest'], (string)$metadataBytes . "tampered");
+    try {
+        $signatures->verify($result['binary'], $publicKey);
+        throw new RuntimeException('Signature verification accepted modified metadata.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'metadata_sha256'), 'Metadata tampering failed for an unexpected reason.');
+    }
+    file_put_contents($result['manifest'], (string)$metadataBytes);
+    $wrongPair = sodium_crypto_sign_keypair();
+    file_put_contents($root . '/wrong-public.key', base64_encode(sodium_crypto_sign_publickey($wrongPair)) . "\n");
+    try {
+        $signatures->verify($result['binary'], $root . '/wrong-public.key');
+        throw new RuntimeException('Signature verification accepted an untrusted public key.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'key_id'), 'Wrong public key failed for an unexpected reason.');
+    }
+    try {
+        $signatures->sign($result['binary'], $privateKey);
+        throw new RuntimeException('Signer overwrote an existing signature.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'Refusing to overwrite'), 'Existing signature failed for an unexpected reason.');
+    }
+    $cliArtifact = $root . '/output/cli-artifact';
+    copy($result['binary'], $cliArtifact);
+    copy($result['manifest'], $cliArtifact . '.manifest.json');
+    copy($result['sbom'], $cliArtifact . '.spdx.json');
+    [$keygenExit, $keygenOutput] = runCli(['keygen', $root . '/cli-private.key', $root . '/cli-public.key']);
+    expect($keygenExit === 0 && str_contains($keygenOutput, 'Key ID'), 'CLI key generation failed.');
+    [$signExit, $signOutput] = runCli(['sign', $cliArtifact, $root . '/cli-private.key']);
+    expect($signExit === 0 && str_contains($signOutput, '.sig.json'), 'CLI artifact signing failed.');
+    [$verifyExit, $verifyOutput] = runCli(['verify', $cliArtifact, $root . '/cli-public.key']);
+    expect($verifyExit === 0 && str_contains($verifyOutput, 'Verified artifact signature'), 'CLI artifact verification failed.');
 
     $phar = new Phar($result['binary']);
     expect($phar->offsetExists('server.php'), 'Packaged archive is missing its entrypoint.');

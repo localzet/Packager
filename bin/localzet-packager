@@ -26,6 +26,7 @@ declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
 
+use Localzet\Packager\ArtifactSignature;
 use Localzet\Packager\BuildCommand;
 use Localzet\Packager\Manifest;
 
@@ -33,12 +34,45 @@ $command = $argv[1] ?? 'help';
 $manifestPath = $argv[2] ?? '';
 
 if ($command === 'help' || $command === '--help' || $command === '-h') {
-    fwrite(STDOUT, "Localzet Packager\n\nUsage:\n  localzet-packager validate <manifest.json>\n  localzet-packager build <manifest.json>\n");
+    fwrite(STDOUT, "Localzet Packager\n\nUsage:\n  localzet-packager validate <manifest.json>\n  localzet-packager build <manifest.json>\n  localzet-packager keygen <private-key> <public-key>\n  localzet-packager sign <artifact> <private-key>\n  localzet-packager verify <artifact> <trusted-public-key>\n");
     exit(0);
 }
 
+$signature = new ArtifactSignature();
+if ($command === 'keygen') {
+    if (!isset($argv[3])) {
+        fwrite(STDERR, "Expected: keygen <private-key> <public-key>\n");
+        exit(2);
+    }
+    try {
+        $keyId = $signature->generateKeypair($manifestPath, $argv[3]);
+        fwrite(STDOUT, "Generated Ed25519 key pair.\nKey ID {$keyId}\nKeep the private key offline.\n");
+        exit(0);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, 'Error: ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+}
+
+if (in_array($command, ['sign', 'verify'], true)) {
+    if (!isset($argv[3])) {
+        fwrite(STDERR, "Expected: {$command} <artifact> <key-file>\n");
+        exit(2);
+    }
+    try {
+        $path = $command === 'sign'
+            ? $signature->sign($manifestPath, $argv[3])
+            : $signature->verify($manifestPath, $argv[3]);
+        fwrite(STDOUT, $command === 'sign' ? "Signed artifact: {$path}\n" : "Verified artifact signature: {$path}\n");
+        exit(0);
+    } catch (Throwable $exception) {
+        fwrite(STDERR, 'Error: ' . $exception->getMessage() . "\n");
+        exit(1);
+    }
+}
+
 if (!in_array($command, ['validate', 'build'], true) || $manifestPath === '') {
-    fwrite(STDERR, "Expected: validate|build <manifest.json>\n");
+    fwrite(STDERR, "Expected: validate|build <manifest.json>, keygen <private-key> <public-key>, sign <artifact> <private-key> or verify <artifact> <trusted-public-key>\n");
     exit(2);
 }
 

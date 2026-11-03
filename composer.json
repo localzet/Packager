@@ -6,7 +6,8 @@
   "require": {
     "php": ">=8.1",
     "ext-json": "*",
-    "ext-phar": "*"
+    "ext-phar": "*",
+    "ext-sodium": "*"
   },
   "autoload": {
     "psr-4": {
