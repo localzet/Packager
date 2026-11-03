@@ -72,6 +72,6 @@ The public key is not included in the bundle and is not trusted automatically. A
 - A prebuilt `micro.sfx` is required; Packager does not compile PHP.
 - `.git`, IDE settings, `node_modules`, `.env*`, `auth.json` and `composer-auth.json` are excluded. Other project files, including tests, may be packaged.
 - Existing `vendor/` contents are included after Composer metadata checks. Only package trusted source and production dependencies.
-- Ed25519 artifact signatures and integrity verification are implemented. Provenance attestations, independent SPDX validation, activation, license enforcement and reproducible independent builds are not implemented.
+- Ed25519 artifact signatures and integrity verification are implemented; tests validate SBOM documents against the official JSON Schema. Semantic SPDX validation, provenance attestations, activation, license enforcement and reproducible independent builds are not implemented.
 - PHAR and micro SAPI do not encrypt PHP source or prevent reverse engineering.
 - Only Linux x86-64 has a real Server runtime acceptance report. TLS, ARM64 and clean-host compatibility have not been verified.

@@ -160,26 +160,61 @@ final class ArtifactSignature
 
     private function hashRegularFile(string $path): string
     {
-        if (is_link($path) || !is_file($path)) {
-            throw new RuntimeException("Expected a regular, non-symlink file: {$path}");
+        $handle = $this->openRegularFile($path);
+        try {
+            $context = hash_init('sha256');
+            if (hash_update_stream($context, $handle) === false) {
+                throw new RuntimeException("Cannot read file for SHA-256: {$path}");
+            }
+            return hash_final($context);
+        } finally {
+            fclose($handle);
         }
-        $hash = hash_file('sha256', $path);
-        if (!is_string($hash)) {
-            throw new RuntimeException("Cannot calculate SHA-256 for file: {$path}");
-        }
-        return $hash;
     }
 
     private function readRegularFile(string $path, int $maxBytes): string
     {
-        if (is_link($path) || !is_file($path) || filesize($path) > $maxBytes) {
-            throw new RuntimeException("Expected a regular file no larger than {$maxBytes} bytes: {$path}");
+        $handle = $this->openRegularFile($path, $maxBytes);
+        try {
+            $contents = stream_get_contents($handle, $maxBytes + 1);
+            if (!is_string($contents) || strlen($contents) > $maxBytes) {
+                throw new RuntimeException("File exceeds the {$maxBytes}-byte read limit: {$path}");
+            }
+            return $contents;
+        } finally {
+            fclose($handle);
         }
-        $contents = file_get_contents($path);
-        if (!is_string($contents)) {
-            throw new RuntimeException("Cannot read file: {$path}");
+    }
+
+    /** @return resource */
+    private function openRegularFile(string $path, ?int $maxBytes = null)
+    {
+        $before = @lstat($path);
+        $regularMode = 0100000;
+        if (!is_array($before) || (($before['mode'] & 0170000) !== $regularMode)
+            || ($maxBytes !== null && $before['size'] > $maxBytes)
+        ) {
+            throw new RuntimeException("Expected a regular non-symlink file" . ($maxBytes === null ? '' : " no larger than {$maxBytes} bytes") . ": {$path}");
         }
-        return $contents;
+        $handle = @fopen($path, 'rb');
+        if (!is_resource($handle)) {
+            throw new RuntimeException("Cannot open file: {$path}");
+        }
+        $opened = fstat($handle);
+        $current = @lstat($path);
+        if (!is_array($opened) || !is_array($current)
+            || (($opened['mode'] & 0170000) !== $regularMode)
+            || (($current['mode'] & 0170000) !== $regularMode)
+            || $before['dev'] !== $opened['dev']
+            || $before['ino'] !== $opened['ino']
+            || $opened['dev'] !== $current['dev']
+            || $opened['ino'] !== $current['ino']
+            || ($maxBytes !== null && $opened['size'] > $maxBytes)
+        ) {
+            fclose($handle);
+            throw new RuntimeException("Expected a regular non-symlink file" . ($maxBytes === null ? '' : " no larger than {$maxBytes} bytes") . ": {$path}");
+        }
+        return $handle;
     }
 
     /** @param array{artifact_sha256:string,metadata_sha256:string,sbom_sha256:string} $files

@@ -72,7 +72,7 @@ Chosen direction: online activation with periodic revalidation and up to seven d
 ## Delivery stages and readiness
 
 1. Toolchain compatibility spike: x86-64 Server 7 build, PHP/extensions probe, two-worker HTTP and SIGINT have passed locally. Clean-host libraries, ARM64, TLS and network/proxy behavior are open.
-2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact, SPDX 2.3 SBOM and hashes are implemented. Independent SPDX validation and verification by a separately maintained verifier remain open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
+2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact, SPDX 2.3 SBOM and hashes are implemented. `composer check` validates generated SBOM fixtures against the pinned official SPDX 2.3.1 JSON Schema and rejects a malformed document; semantic SPDX validation and verification by a separately maintained artifact verifier remain open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
 3. **Подпись артефактов:** Ed25519 подпись комплекта и отказ при изменении бинарника, metadata или SBOM покрыты тестами. Provenance attestations, безопасная операционная процедура хранения/ротации release keys и анализ воспроизводимости ещё нужны.
 4. License client protocol: mock activation, valid/expired/revoked/tampered lease, timeout, retry, offline grace, clock rollback and atomic cache tests.
 5. Release: Linux x86-64 and ARM64 artifacts, clean-host smoke, CI matrix, docs, support/rollback runbook and explicit legal review of binary distribution terms.

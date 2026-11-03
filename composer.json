@@ -18,5 +18,8 @@
     "test": "php -d phar.readonly=0 tests/run.php",
     "lint": "find bin src tests -type f -print0 | xargs -0 -n1 php -l",
     "check": ["@lint", "@test"]
+  },
+  "require-dev": {
+    "opis/json-schema": "^2.6"
   }
 }

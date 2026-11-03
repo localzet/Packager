@@ -105,7 +105,16 @@ try {
     expect($metadata['composer_lock_sha256'] === hash_file('sha256', $root . '/project/composer.lock'), 'Composer lockfile hash was not recorded.');
     expect(is_file($result['sbom']), 'Builder did not produce an SPDX SBOM.');
     expect(hash_file('sha256', $result['sbom']) === $metadata['sbom']['sha256'], 'SBOM SHA-256 does not match artifact metadata.');
-    $sbom = json_decode((string)file_get_contents($result['sbom']), true, 32, JSON_THROW_ON_ERROR);
+    $sbomBytes = (string)file_get_contents($result['sbom']);
+    $sbom = json_decode($sbomBytes, true, 32, JSON_THROW_ON_ERROR);
+    $schemaPath = __DIR__ . '/schemas/spdx-2.3.1.schema.json';
+    expect(hash_file('sha256', $schemaPath) === '4126dc29f15e92feec92e9622f4939131ad58b125d6f578aa93e980a6e6f3212', 'Pinned SPDX schema checksum changed.');
+    $schema = json_decode((string)file_get_contents($schemaPath), false, 128, JSON_THROW_ON_ERROR);
+    $validation = (new Opis\JsonSchema\Validator())->validate(json_decode($sbomBytes, false, 128, JSON_THROW_ON_ERROR), $schema);
+    expect($validation->isValid(), 'Generated SBOM does not match the official SPDX 2.3.1 JSON Schema: ' . (string)$validation);
+    $invalidSbom = json_decode($sbomBytes, false, 128, JSON_THROW_ON_ERROR);
+    unset($invalidSbom->spdxVersion);
+    expect(!(new Opis\JsonSchema\Validator())->validate($invalidSbom, $schema)->isValid(), 'SPDX schema check accepted a document with a required field removed.');
     expect($sbom['spdxVersion'] === 'SPDX-2.3', 'SBOM uses an unexpected SPDX version.');
     expect($sbom['documentDescribes'] === ['SPDXRef-Application'], 'SBOM does not identify its described application package.');
     expect($sbom['packages'][1]['externalRefs'][0]['referenceLocator'] === 'pkg:composer/fixture/runtime@1.0.0', 'SBOM is missing the Composer package URL.');
@@ -155,6 +164,22 @@ try {
         throw new RuntimeException('Signature verification accepted an untrusted public key.');
     } catch (RuntimeException $exception) {
         expect(str_contains($exception->getMessage(), 'key_id'), 'Wrong public key failed for an unexpected reason.');
+    }
+    $sbomBackup = $result['sbom'] . '.backup';
+    rename($result['sbom'], $sbomBackup);
+    if (symlink($sbomBackup, $result['sbom'])) {
+        try {
+            $signatures->verify($result['binary'], $publicKey);
+            throw new RuntimeException('Signature verifier accepted an SBOM symlink.');
+        } catch (RuntimeException $exception) {
+            expect(str_contains($exception->getMessage(), 'regular non-symlink'), 'SBOM symlink failed for an unexpected reason.');
+        } finally {
+            unlink($result['sbom']);
+            rename($sbomBackup, $result['sbom']);
+        }
+    } else {
+        rename($sbomBackup, $result['sbom']);
+        throw new RuntimeException('Test environment cannot create the symlink fixture.');
     }
     try {
         $signatures->sign($result['binary'], $privateKey);

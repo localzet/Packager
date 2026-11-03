@@ -27,7 +27,7 @@ The current Packager CLI was tested with a production-only dependency tree. Its 
 - TLS handshake and production certificate loading.
 - Clean-host run without system PHP libraries, plus ARM64 build/runtime.
 - Reproducible artifact hash across independent builders.
-- Independent SPDX SBOM validation and artifact signature verification (SBOM generation is implemented, but it has not yet been checked with an independent SPDX validator).
+- Packager tests validate a generated fixture SBOM against the official [SPDX 2.3.1 JSON Schema](https://github.com/spdx/spdx-spec/blob/6f2cb47d13db19b12c23885573b22ef32ec1ada5/schemas/spdx-schema.json), and reject a malformed document. The schema and validator are pinned in the repository; semantic SPDX validation remains open. Signature tests verify Ed25519 over the executable, metadata and SBOM and reject tampering and symlink substitution; the archived Server artifact has not been signed and checked by a separate release consumer.
 - License activation, lease expiry/revocation and offline grace.
 
 Do not describe the packager as production-ready until these gates and the cases in [architecture readiness](architecture.md#delivery-stages-and-readiness) pass.
