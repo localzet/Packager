@@ -51,10 +51,10 @@ The planned license lease binds a product and artifact/customer identity to an e
 
 ## Delivery stages
 
-1. **Compatibility:** Linux x86-64 has a local Server 7 build, runtime probe, two-worker HTTP check and SIGINT shutdown check. Clean-host libraries, ARM64, TLS and network/proxy behavior remain open.
+1. **Compatibility:** Linux x86-64 has a current Server 7 build, runtime probe, two-worker HTTP/TLS check and SIGINT shutdown check in a `scratch` container without system libraries. Production certificate loading, ARM64 and network/proxy behavior remain open.
 2. **Build pipeline:** manifest validation, PHAR assembly, pinned tool invocation, SPDX 2.3 SBOM and artifact hashes are implemented. `composer check` validates generated SBOM fixtures against the pinned official SPDX 2.3.1 JSON Schema and rejects a malformed document. Semantic SPDX validation and verification by a separately maintained artifact verifier remain open. Fixture tests cover traversal, symlinks, development dependencies, missing extensions, signature verification and tamper rejection.
 3. **Provenance:** define an attestation format, release-key custody and rotation procedure, independent SPDX validation, and reproducible-build analysis.
 4. **Licensing:** test valid, expired, revoked and tampered leases, network failures, retry policy, offline grace and clock changes against a mock service before building a production API.
-5. **Release:** add supported target artifacts, clean-host tests, support and rollback procedures, public documentation and legal review of binary distribution terms.
+5. **Release:** add artifacts and clean-host tests for every supported target, support and rollback procedures, public documentation and legal review of binary distribution terms.
 
 Packager is not release-ready until these gates pass on every supported target. A successful build or CI run alone does not prove clean-host compatibility, source protection or license enforcement.

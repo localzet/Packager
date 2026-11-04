@@ -2,7 +2,7 @@
 
 ## Текущее состояние
 
-Реализован CLI для одной цели: Linux x86-64. Он проверяет manifest, готовые production-зависимости Composer и runtime `micro.sfx`, создаёт PHAR и запускает static-php-cli для объединения файлов. Metadata содержит хеш артефакта, `micro.sfx` и `composer.lock`, версию PHP, список загруженных и обязательных расширений, target и версию toolchain. Подробности фактического прогона приведены в [отчёте о совместимости](compatibility-spike.md).
+Реализован CLI для одной цели: Linux x86-64. Он проверяет manifest, готовые production-зависимости Composer и runtime `micro.sfx`, создаёт PHAR и запускает static-php-cli для объединения файлов. Metadata содержит хеш артефакта, `micro.sfx` и `composer.lock`, версию PHP, список загруженных и обязательных расширений, target и версию toolchain. Актуальная сборка Server 7 прошла HTTP, TLS, два worker-процесса и SIGINT в `scratch` без системных библиотек; подробности приведены в [отчёте о совместимости](compatibility-spike.md) и [его русской версии](compatibility-spike.ru.md).
 
 Генерация SPDX 2.3 SBOM по production Composer lockfile реализована; он включает приложение, известные пакеты и SHA-256 артефакта, а metadata содержит SHA-256 SBOM. Неподтверждённые данные о лицензиях передаются как `NOASSERTION`. Отдельные команды создают Ed25519 подпись комплекта «бинарник + metadata + SBOM» и проверяют её по переданному доверенному публичному ключу. Provenance attestations, online-активация и доставка обновлений пока не реализованы. Вызовы дочерних процессов ограничены таймаутом 300 секунд. Остальные разделы этого документа описывают целевую архитектуру и этапы, а не существующие возможности CLI.
 
@@ -71,10 +71,10 @@ Chosen direction: online activation with periodic revalidation and up to seven d
 
 ## Delivery stages and readiness
 
-1. Toolchain compatibility spike: x86-64 Server 7 build, PHP/extensions probe, two-worker HTTP and SIGINT have passed locally. Clean-host libraries, ARM64, TLS and network/proxy behavior are open.
+1. Toolchain compatibility spike: x86-64 Server 7 build, PHP/extensions probe, two-worker HTTP/TLS and SIGINT passed in a `scratch` container without system libraries. Production certificate loading, ARM64 and network/proxy behavior remain open.
 2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact, SPDX 2.3 SBOM and hashes are implemented. `composer check` validates generated SBOM fixtures against the pinned official SPDX 2.3.1 JSON Schema and rejects a malformed document; semantic SPDX validation and verification by a separately maintained artifact verifier remain open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
 3. **Подпись артефактов:** Ed25519 подпись комплекта и отказ при изменении бинарника, metadata или SBOM покрыты тестами. Provenance attestations, безопасная операционная процедура хранения/ротации release keys и анализ воспроизводимости ещё нужны.
 4. License client protocol: mock activation, valid/expired/revoked/tampered lease, timeout, retry, offline grace, clock rollback and atomic cache tests.
-5. Release: Linux x86-64 and ARM64 artifacts, clean-host smoke, CI matrix, docs, support/rollback runbook and explicit legal review of binary distribution terms.
+5. Release: supported-target artifacts and clean-host checks for each target, CI matrix, docs, support/rollback runbook and explicit legal review of binary distribution terms.
 
 Ready means no source PHP runtime on clean targets, HTTP/TCP and graceful shutdown pass on both architectures, malformed/tampered metadata fails closed, no signing secret ships in artifact, SBOM/signature verify, and a fresh independent build/review passes. No stage is complete based on configuration or compilation alone.

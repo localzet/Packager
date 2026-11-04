@@ -4,11 +4,11 @@ Localzet Packager builds standalone executables for Localzet Server and Triangle
 
 ## Status
 
-The CLI prototype targets `linux-x86_64`. It validates the manifest and Composer graph, packages project files into a PHAR, probes the PHP version and extensions exposed by `micro.sfx`, and combines the PHAR with the runtime through a pinned static-php-cli version. A standalone build of the current Server 7 source served HTTP through two worker processes and shut down cleanly on SIGINT. See the [compatibility report](docs/compatibility-spike.md) for hashes and evidence.
+The CLI prototype targets `linux-x86_64`. It validates the manifest and Composer graph, packages project files into a PHAR, probes the PHP version and extensions exposed by `micro.sfx`, and combines the PHAR with the runtime through a pinned static-php-cli version. On 2026-11-04, Packager built the current Server 7 source and the artifact passed HTTP, TLS, two-worker and SIGINT checks in a `scratch` container without system libraries. See the [compatibility report](docs/compatibility-spike.md) for evidence and hashes.
 
-Packager is not ready for broad use. Clean-host, ARM64, TLS, reproducible builds and independent artifact verification remain untested. SBOM generation and Ed25519 artifact signing are implemented; online activation and distributable releases are not. PHAR and micro SAPI packaging do not prevent PHP source extraction.
+Packager is not ready for broad use. The x86-64 `scratch` smoke passed, including TLS with a temporary self-signed certificate; production certificate loading, ARM64, reproducible builds and independent artifact verification remain untested. SBOM generation and Ed25519 artifact signing are implemented; online activation and distributable releases are not. PHAR and micro SAPI packaging do not prevent PHP source extraction.
 
-See the [Russian overview](README.md), [architecture](docs/architecture.en.md) and [CLI guide](docs/cli.en.md).
+See the [Russian overview](README.md), [architecture](docs/architecture.en.md), [CLI guide](docs/cli.en.md) and [compatibility report](docs/compatibility-spike.md).
 
 ## Build requirements
 
