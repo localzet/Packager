@@ -12,7 +12,7 @@ Packager выдаёт автономное приложение для выбр�
 
 ## Требования и границы
 
-Целевые функции: проверка проекта и `composer.lock`; сборка по target и extension manifest; атомарная выдача артефакта и metadata; проверка подписи; активация и обновление подписанной lease. Владелец продукта утвердил онлайн-проверку лицензии и офлайн-период до 7 дней после последней успешной проверки; периодичность online-проверки и детали протокола ещё требуется определить.
+Целевые функции: проверка проекта и `composer.lock`; сборка по target и extension manifest; атомарная выдача артефакта и metadata; проверка подписи; активация и обновление подписанной lease. Владелец продукта утвердил онлайн-перепроверку лицензии каждые 24 часа и офлайн-допуск до 7 дней после последней успешной проверки. Lease должна подписываться сервером и включать срок действия не более 7 дней; закрытый ключ подписи остаётся только на сервере. Сетевой протокол и сервер активации ещё не реализованы.
 
 NFR: одинаковые входы должны давать проверяемые артефакты; сборка не должна запускать сетевой код проекта; build worker изолирован; таймауты и размер входа ограничены; клиент лицензии не содержит серверных секретов; ошибки активации диагностируемы без вывода токенов.
 
@@ -47,7 +47,7 @@ flowchart TB
 
 Build input manifest records project root, entrypoint, target OS/architecture, PHP version and explicit extensions. The current CLI does not resolve Composer dependencies: the operator installs production dependencies beforehand, and the builder checks the installed tree against its metadata and lockfile. Current output metadata records tool versions, runtime version and loaded extensions, extension requirements, target and SHA-256 hashes. The builder emits an SPDX 2.3 SBOM from the validated production Composer lockfile with Composer PURLs and known dependency relationships; uncertain license information is `NOASSERTION`. A separate release key can sign the binary, metadata and SBOM hashes; the signature file does not include a trusted public key. Provenance attestation and source revision binding are not yet implemented. Do not store secrets or user credentials in manifest/SBOM.
 
-The planned license lease is a versioned signed payload with product, artifact/customer binding, expiry, key id and optional revocation epoch. Signature verification uses an embedded public key; the client stores leases atomically with least-privilege filesystem permissions. Online activation with periodic revalidation and up to seven days of offline operation after the last successful check are approved product requirements. Revalidation frequency, activation protocol and privacy/retention terms remain undecided. The license client and service are not implemented.
+The planned license lease is a versioned signed payload with product, artifact/customer binding, expiry, key id and optional revocation epoch. Signature verification uses an embedded public key; the client stores leases atomically with least-privilege filesystem permissions. The approved policy revalidates online every 24 hours and allows up to seven days offline after the last successful check. The server signs leases with a lifetime no longer than seven days; its private signing key never ships in an artifact. The activation protocol and privacy/retention terms, client and service are not implemented.
 
 ## Infrastructure / threat model
 
@@ -67,7 +67,7 @@ Chosen: pin stable 2.x behind an adapter. Do not target alpha major versions. A 
 
 ### ADR-003: Signed online activation lease
 
-Chosen direction: online activation with periodic revalidation and up to seven days offline after the last successful check. The exact revalidation interval, protocol, privacy terms and legal license terms remain open. The server private signing key must stay outside generated executables.
+Chosen direction: online activation revalidated every 24 hours, with up to seven days offline after the last successful check. Leases are server-signed and valid for no more than seven days; the server private signing key must stay outside generated executables. The activation protocol, privacy terms and legal license terms remain open.
 
 ## Delivery stages and readiness
 

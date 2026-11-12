@@ -41,13 +41,13 @@ The manifest records the project root, entrypoint, target, PHP version, required
 
 The SPDX SBOM inventories the validated production lockfile; it is not an independent source analysis or provenance attestation. Artifact signatures protect the bundle's hashes but do not identify a trusted key unless the verifier obtains its public key through a trusted channel. Keep release private keys outside the project tree and build worker. Build trusted source in an isolated worker: the current CLI is not a sandbox for hostile project files.
 
-The planned license lease binds a product and artifact/customer identity to an expiry and key ID. Online activation with periodic revalidation and up to seven days of offline operation after the last successful check are approved requirements. The revalidation interval, protocol and privacy/retention terms remain undecided. The client, API, lease validation, storage and revocation are not implemented. No packaging technique can guarantee that embedded PHP source is unrecoverable.
+The planned license lease binds a product and artifact/customer identity to an expiry and key ID. The approved policy revalidates online every 24 hours and allows up to seven days offline after the last successful check. The server signs leases with a lifetime no longer than seven days; its private signing key never ships in an artifact. The activation protocol and privacy/retention terms, client and service are not implemented. No packaging technique can guarantee that embedded PHP source is unrecoverable.
 
 ## Architecture decisions
 
 1. **Separate product.** Keep Packager independent from Server and upstream static-php-cli.
 2. **Pinned static-php-cli 2.x backend.** Keep the backend version explicit; verify the produced runtime rather than assuming its extension set.
-3. **Online license revalidation.** Use signed, expiring leases with up to seven days of offline operation after the last successful check. Keep private signing keys outside generated binaries; define the online interval and protocol before implementation.
+3. **Online license revalidation.** Revalidate every 24 hours and allow up to seven days offline after the last successful check using a server-signed lease. Keep private signing keys outside generated binaries. Define and document the activation protocol and privacy/retention terms before deployment.
 
 ## Delivery stages
 
