@@ -27,6 +27,7 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use Localzet\Packager\ArtifactSignature;
 use Localzet\Packager\BuildCommand;
+use Localzet\Packager\LicenseLease;
 use Localzet\Packager\Manifest;
 
 function expect(bool $condition, string $message): void
@@ -34,6 +35,16 @@ function expect(bool $condition, string $message): void
     if (!$condition) {
         throw new RuntimeException($message);
     }
+}
+
+function expectLeaseFailure(callable $operation, string $message): void
+{
+    try {
+        $operation();
+    } catch (RuntimeException) {
+        return;
+    }
+    throw new RuntimeException($message);
 }
 
 /** @param list<string> $arguments @return array{int,string} */
@@ -127,6 +138,113 @@ try {
     $keyId = $signatures->generateKeypair($privateKey, $publicKey);
     expect((fileperms($privateKey) & 0077) === 0, 'Generated private key is accessible to group or other users.');
     expect($keyId === hash('sha256', base64_decode(trim((string)file_get_contents($publicKey)), true)), 'Generated key ID does not match public key.');
+
+    $leasePair = sodium_crypto_sign_keypair();
+    $leaseSecretKey = sodium_crypto_sign_secretkey($leasePair);
+    $leasePublicKey = sodium_crypto_sign_publickey($leasePair);
+    $leaseKeyId = hash('sha256', $leasePublicKey);
+    $leaseTrustedKeys = [$leaseKeyId => base64_encode($leasePublicKey)];
+    $leaseNow = 2_000_000_000;
+    $leasePayload = [
+        'schema_version' => 1,
+        'algorithm' => 'Ed25519',
+        'key_id' => $leaseKeyId,
+        'product_id' => 'localzet/server',
+        'release_id' => '7.0.0',
+        'installation_id' => 'install-0123456789abcdef',
+        'issued_at' => $leaseNow,
+        'expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+    ];
+    $makeLease = static function (array $overrides = []) use ($leasePayload, $leaseSecretKey): string {
+        $payload = array_replace($leasePayload, $overrides);
+        $canonical = [
+            'schema_version' => $payload['schema_version'],
+            'algorithm' => $payload['algorithm'],
+            'key_id' => $payload['key_id'],
+            'product_id' => $payload['product_id'],
+            'release_id' => $payload['release_id'],
+            'installation_id' => $payload['installation_id'],
+            'issued_at' => $payload['issued_at'],
+            'expires_at' => $payload['expires_at'],
+        ];
+        $signed = json_encode($canonical, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+        $signature = sodium_crypto_sign_detached($signed, $leaseSecretKey);
+        return json_encode(['payload' => $payload, 'signature' => base64_encode($signature)], JSON_THROW_ON_ERROR);
+    };
+    $validLease = LicenseLease::verify(
+        $makeLease(),
+        $leaseTrustedKeys,
+        'localzet/server',
+        '7.0.0',
+        'install-0123456789abcdef',
+        $leaseNow,
+    );
+    expect($validLease->expiresAt() === $leaseNow + LicenseLease::MAX_TTL_SECONDS, 'A seven-day signed license lease was rejected.');
+    expect(!$validLease->shouldRevalidateAt($leaseNow + 86_399), 'Lease revalidation became due before 24 hours.');
+    expect($validLease->shouldRevalidateAt($leaseNow + LicenseLease::REVALIDATION_INTERVAL_SECONDS), 'Lease revalidation was not due at 24 hours.');
+    $skewedLease = $makeLease([
+        'issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+        'expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+    ]);
+    LicenseLease::verify($skewedLease, $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow);
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease([
+            'issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+            'expires_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + LicenseLease::MAX_TTL_SECONDS,
+        ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'Future-issued lease exceeded the seven-day offline window from verification time.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/other', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease was accepted for a different product.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/server', '7.0.1', 'install-0123456789abcdef', $leaseNow),
+        'License lease was accepted for a different release.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-other', $leaseNow),
+        'License lease was accepted for a different installation.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(), [], 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease was accepted with an unknown signing key.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(['unexpected' => 'value']), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease with an extra payload field was accepted.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(['expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS + 1]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease exceeded the seven-day maximum TTL.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(['issued_at' => $leaseNow - 3_600, 'expires_at' => $leaseNow]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'Expired license lease was accepted.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(['issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + 1]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease with a future issue time was accepted.',
+    );
+    $tamperedLease = json_decode($makeLease(), true, 16, JSON_THROW_ON_ERROR);
+    $tamperedLease['payload']['release_id'] = '7.0.1';
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify(json_encode($tamperedLease, JSON_THROW_ON_ERROR), $leaseTrustedKeys, 'localzet/server', '7.0.1', 'install-0123456789abcdef', $leaseNow),
+        'Tampered license lease payload was accepted.',
+    );
+    $badSignature = json_decode($makeLease(), true, 16, JSON_THROW_ON_ERROR);
+    $badSignature['signature'] = base64_encode(random_bytes(SODIUM_CRYPTO_SIGN_BYTES));
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify(json_encode($badSignature, JSON_THROW_ON_ERROR), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'Invalid Ed25519 license lease signature was accepted.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify('{"payload":[],"signature":""}', $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'Malformed license lease payload was accepted.',
+    );
+    sodium_memzero($leaseSecretKey);
+    sodium_memzero($leasePair);
+
     $signaturePath = $signatures->sign($result['binary'], $privateKey);
     expect($signaturePath === $result['binary'] . '.sig.json', 'Signature path has an unexpected name.');
     $signatures->verify($result['binary'], $publicKey);
