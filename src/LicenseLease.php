@@ -157,7 +157,7 @@ final class LicenseLease
         $renewAfter = $payload['renew_after'];
         $ttl = $expiresAt - $issuedAt;
         $renewalDelay = $renewAfter - $issuedAt;
-        if ($issuedAt < 0 || $expiresAt <= $issuedAt
+        if ($issuedAt < 0 || $expiresAt <= $issuedAt || $notBefore >= $expiresAt
             || $ttl > self::MAX_TTL_SECONDS
             || $issuedAt > $now + self::FUTURE_ISSUED_AT_SKEW_SECONDS
             || $notBefore > $now + self::FUTURE_ISSUED_AT_SKEW_SECONDS

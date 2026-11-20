@@ -299,6 +299,22 @@ try {
     );
     expectLeaseFailure(
         static fn() => LicenseLease::verify($makeLease([
+            'nbf' => $leaseNow + 60,
+            'exp' => $leaseNow + 60,
+            'renew_after' => $leaseNow + 30,
+        ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease with an empty validity interval was accepted.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease([
+            'nbf' => $leaseNow + 300,
+            'exp' => $leaseNow + 60,
+            'renew_after' => $leaseNow + 30,
+        ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        'License lease that starts after expiration was accepted.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease([
             'iat' => $leaseNow - 3_600,
             'nbf' => $leaseNow - 3_600,
             'exp' => $leaseNow,
