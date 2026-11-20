@@ -2,79 +2,77 @@
 
 ## Текущее состояние
 
-Реализован CLI для одной цели: Linux x86-64. Он проверяет manifest, готовые production-зависимости Composer и runtime `micro.sfx`, создаёт PHAR и запускает static-php-cli для объединения файлов. Metadata содержит хеш артефакта, `micro.sfx` и `composer.lock`, версию PHP, список загруженных и обязательных расширений, target и версию toolchain. Актуальная сборка Server 7 прошла HTTP, TLS, два worker-процесса и SIGINT в `scratch` без системных библиотек; подробности приведены в [отчёте о совместимости](compatibility-spike.md) и [его русской версии](compatibility-spike.ru.md).
+Packager собирает автономные исполняемые файлы для Linux x86-64 из подготовленного production Composer-графа. Он проверяет manifest и lockfile, создаёт PHAR, проверяет реальный PHP runtime и объединяет его закреплённой версией static-php-cli. Результат сопровождается metadata, SPDX 2.3 SBOM и отдельной Ed25519-подписью комплекта.
 
-Генерация SPDX 2.3 SBOM по production Composer lockfile реализована; он включает приложение, известные пакеты и SHA-256 артефакта, а metadata содержит SHA-256 SBOM. Неподтверждённые данные о лицензиях передаются как `NOASSERTION`. Отдельные команды создают Ed25519 подпись комплекта «бинарник + metadata + SBOM» и проверяют её по переданному доверенному публичному ключу. Модель подписанной license lease проверяет Ed25519-подпись, идентификаторы продукта, версии и установки, период действия и максимальный срок в семь дней. Сетевой клиент, файловый cache, интеграция в PHAR, API сервиса активации и enforcement в работающем процессе пока не реализованы. Provenance attestations и доставка обновлений также не реализованы. Вызовы дочерних процессов ограничены таймаутом 300 секунд. Остальные разделы этого документа описывают целевую архитектуру и этапы, а не существующие возможности CLI.
+Лицензируемые сборки встраивают API-клиент, строгую проверку Ed25519 JWS, защищённое файловое состояние и контроль lease при запуске. Модуль License API реализован в отдельном приватном локальном checkout и покрыт unit и PostgreSQL integration тестами. Он ещё не опубликован и не развёрнут: production ingress, hostname, KMS key и end-to-end обмен с бинарником не проверены.
 
-## Бизнес-контекст
+Подтверждённая совместимость Server 7 для x86-64 описана в [отчёте](compatibility-spike.md). Production TLS, ARM64, воспроизводимые сборки и независимый анализ артефактов остаются за рамками выполненной проверки. PHAR не шифрует PHP-код и не исключает reverse engineering.
 
-Packager выдаёт автономное приложение для выбранной платформы из PHP-проекта и закреплённого dependency graph. Ценность — упрощённая установка на целевом сервере и контролируемая выдача коммерческих артефактов. Это отдельный продукт; сервер активации и юридические условия лицензии пока не входят в реализацию.
+## Контекст и границы
 
-## Требования и границы
+Packager превращает PHP-приложение и его закреплённые зависимости в исполняемый файл для выбранного target. Сборка выполняется на доверенной машине и не запускает Composer-скрипты или код приложения. Поддерживается только Linux x86-64.
 
-Целевые функции: проверка проекта и `composer.lock`; сборка по target и extension manifest; атомарная выдача артефакта и metadata; проверка подписи; активация и обновление подписанной lease. Владелец продукта утвердил онлайн-перепроверку лицензии каждые 24 часа и офлайн-допуск до 7 дней после последней успешной проверки. Lease должна подписываться сервером и включать срок действия не более 7 дней; закрытый ключ подписи остаётся только на сервере. Сетевой протокол и сервер активации ещё не реализованы.
+Лицензионные решения, утверждённые владельцем продукта: лимит активаций хранится в лицензии и по умолчанию равен 1; клиент перепроверяет право через API примерно каждые 24 часа с разбросом времени; подписанная lease действует не дольше семи дней. При истечении lease приложение не запускается либо Server получает запрос штатно завершить worker-группу. Выпуск новой версии требует online renewal для привязки lease к новому release/product version.
 
-NFR: одинаковые входы должны давать проверяемые артефакты; сборка не должна запускать сетевой код проекта; build worker изолирован; таймауты и размер входа ограничены; клиент лицензии не содержит серверных секретов; ошибки активации диагностируемы без вывода токенов.
-
-Вне scope MVP: невозможность reverse engineering, Windows/macOS targets, production license service, billing, multi-tenant build farm и смена лицензии исходных библиотек.
-
-## C4 — Context
+## C4 — контекст
 
 ```mermaid
 flowchart LR
-  Dev[Разработчик приложения] -->|исходники + lockfile + manifest| P[Localzet Packager]
-  P -->|запрос pinned toolchain| SPC[static-php-cli]
-  P -->|standalone artifact| U[Пользователь бинарника]
-  U -->|activation request| L[License API, будущий компонент]
-  L -->|подписанная expiring lease| U
+  Dev[Разработчик приложения] -->|исходники, lockfile, manifest| P[Localzet Packager]
+  P -->|закреплённый build toolchain| SPC[static-php-cli]
+  P -->|исполняемый файл, SBOM, подпись| Ops[Оператор приложения]
+  Ops -->|HTTPS activation / renewal / release| API[License API]
+  API -->|подписанная Ed25519 lease| Ops
+  API --> DB[(PostgreSQL: HMAC fingerprints)]
+  API --> KMS[AWS KMS: Ed25519 private key]
 ```
 
-## C4 — Containers
+License API исходники, миграции и OpenAPI существуют локально. На дату последней проверки публичный HTTPS endpoint и production KMS не настроены; схема показывает целевую эксплуатационную связь, а не действующий production сервис.
+
+## C4 — контейнеры
 
 ```mermaid
 flowchart TB
-  CLI[Packager CLI] --> V[Project Validator]
-  CLI --> B[Build Orchestrator]
-  B --> A[StaticPHP Backend Adapter]
-  A --> SPC[Version-pinned static-php-cli]
-  B --> M[Runtime metadata and hashes]
-  APP[Packaged Application] --> LC[License Client]
-  LC --> API[License API - not implemented]
-  API -->|signed lease| LC
+  CLI[Packager CLI] --> Validator[Manifest и Composer validator]
+  CLI --> Builder[PHAR и build orchestrator]
+  Builder --> SPC[Version-pinned static-php-cli]
+  Builder --> Bundle[Бинарник + metadata + SPDX SBOM]
+  Bundle --> Stub[Лицензионный PHAR bootstrap]
+  Stub --> Store[Локальное состояние 0700 / 0600]
+  Stub --> Client[HTTPS License API client]
+  Client --> API[License API]
+  API --> Database[(PostgreSQL: fingerprints)]
+  API --> Signer[AWS KMS Ed25519 signer]
 ```
 
-## Application / data
+## Поток лицензии
 
-Build input manifest records project root, entrypoint, target OS/architecture, PHP version and explicit extensions. The current CLI does not resolve Composer dependencies: the operator installs production dependencies beforehand, and the builder checks the installed tree against its metadata and lockfile. Current output metadata records tool versions, runtime version and loaded extensions, extension requirements, target and SHA-256 hashes. The builder emits an SPDX 2.3 SBOM from the validated production Composer lockfile with Composer PURLs and known dependency relationships; uncertain license information is `NOASSERTION`. A separate release key can sign the binary, metadata and SBOM hashes; the signature file does not include a trusted public key. Provenance attestation and source revision binding are not yet implemented. Do not store secrets or user credentials in manifest/SBOM.
+1. Оператор передаёт license key в stdin команды `--license-activate`. Ключ не записывается в state; API использует его только для выдачи активации. Повтор сетевой попытки использует тот же idempotency key.
+2. Бинарник сохраняет случайный installation ID, access token и lease в приватном каталоге, привязанном к `product_id`. Данные сохраняются между release upgrades; каталог и файлы принадлежат системному пользователю и имеют режимы `0700/0600`.
+3. Перед приложением bootstrap проверяет подпись, издателя, `kid`, product, release, version, installation ID, срок и срок следующей проверки. Публичный ключ закреплён в бинарнике.
+4. Когда наступает подписанный `renew_after`, клиент запускает renewal отдельным процессом, чтобы HTTP не блокировал event loop. Server worker каждые секунду проверяет отказ API и актуальный срок lease; отдельный таймер запрашивает graceful shutdown в момент истечения.
+5. Сетевой сбой допускает работу до `exp`. Истёкшая lease, постоянный отказ API или переход на новый release/version требует успешного renewal до запуска. Ручные команды `--license-renew` и `--license-release` описаны в [CLI guide](cli.md).
 
-Модель lease принимает JSON envelope с полями `payload` и `signature`. Payload содержит `schema_version: 1`, `algorithm: "Ed25519"`, `key_id`, `product_id`, `release_id`, `installation_id`, `issued_at` и `expires_at`; дополнительных полей быть не должно. `key_id` — lowercase hex SHA-256 от открытого ключа, а доверенный набор задаётся как `key_id` → base64(raw public key). Подпись покрывает компактный JSON payload с фиксированным порядком полей: `schema_version`, `algorithm`, `key_id`, `product_id`, `release_id`, `installation_id`, `issued_at`, `expires_at`. Валидатор отклоняет неизвестные ключи, лишние или отсутствующие поля, несовпадение идентификаторов, некорректную подпись, истёкший lease и срок действия более семи дней. `expires_at` также ограничен семью днями от момента проверки, поэтому допуск рассогласования часов не удлиняет офлайн-период. Для рассогласования часов допускается `issued_at` не более чем на пять минут в будущем; после `expires_at` дополнительного допуска нет. Утверждённая политика требует онлайн-перепроверку каждые 24 часа и разрешает офлайн до семи дней после последней успешной проверки. Модель пока не загружает и не сохраняет lease и не управляет работой приложения. Клиент, сервис активации, отзыв и условия хранения данных не реализованы. Закрытый ключ сервера не должен попадать в бинарник.
+Компактный JWS использует `alg=EdDSA`, `typ=JWT` и `kid`, равный SHA-256 открытого Ed25519 ключа в unpadded base64url. `kid` и публичный ключ не являются секретами. API хранит HMAC-отпечатки лицензий, access tokens и installation IDs; приватный signing key остаётся вне бинарников в KMS. Клиент хранит access token в локальном файле `0600`, потому что ему нужно предъявлять его для продления и отзыва.
 
-## Infrastructure / threat model
+## Безопасность и эксплуатационные ограничения
 
-The current builder uses a private temporary directory and does not invoke Composer or application code. A mock activation API is not implemented. Builds must not run on a privileged shared worker. Threats include malicious project files, crafted paths, dependency drift, stolen signing key, cloned binaries, clock rollback, activation outage, tampered executable and source extraction. Current controls include path and symlink checks, Composer dev-dependency rejection, input-size limits, a pinned toolchain version check, an actual runtime capability probe, 300-second subprocess timeouts, and optional detached signatures over release hashes. Key custody, rotation, trusted public-key distribution, build isolation and signed license leases remain operational or future work. No control makes embedded PHP source unrecoverable.
+Build worker не является sandbox для недоверенного дерева проекта. Убирайте секреты и пользовательские данные до упаковки, проверяйте исходники и toolchain, используйте отдельный worker с минимальными правами. Подпись бандла подтверждает целостность, но сама по себе не удостоверяет происхождение сборки.
 
-Expected initial load is developer-triggered builds (low/variable); build resource cost dominates and is isolated per job. Activation API capacity and availability targets are deferred until service scope is approved.
+Лицензируемому runtime нужны `curl`, `pcntl`, `posix`, `sodium`, доступный `proc_open` и Localzet Server 7+. Не запускайте приложение от root, если можно назначить системного пользователя. При конфигурации `Server::$user` activation state должен заранее принадлежать UID worker-а, а активацию следует выполнять от этого пользователя. Переменная `LOCALZET_LICENSE_DIR` задаёт базовый каталог; сохраняйте путь и owner между обновлениями.
 
-## ADRs
+Локальные часы влияют на оценку срока; подпись не защищает от администратора, способного менять часы, файлы или сам бинарник. Лицензионный enforcement повышает стоимость обхода и управляет удалённым отзывом, но не даёт гарантии anti-tamper и не защищает PHP исходники от извлечения.
 
-### ADR-001: Separate packager product
+## Архитектурные решения
 
-Chosen: separate repository/product rather than modifying Server or static-php-cli. This keeps release lifecycles and upstream toolchain boundaries clear.
+1. **Отдельные продукты.** Packager и License API независимы от Server и static-php-cli; у них свои релизы и границы владения ключами.
+2. **Закреплённый static-php-cli 2.x.** Версия toolchain проверяется перед сборкой, а состав micro runtime — фактическим probe.
+3. **Подписанная online lease.** Клиент проверяет подписанный срок каждые ~24 часа, использует online renewal и не принимает lease дольше семи дней.
+4. **Ключи и локальное состояние.** В бинарнике хранится только публичный ключ. На API стороне приватный ключ находится в KMS; локальные токен и lease имеют owner-only права. Повтор активации ограничен idempotency key.
+5. **Идентичность установки переживает обновления.** State каталог адресуется по `product_id`, а renewal заново подписывает право для текущего release/version. Изменение бинарника требует сети до запуска.
 
-### ADR-002: static-php-cli v2 backend first
+## Готовность к выпуску
 
-Chosen: pin stable 2.x behind an adapter. Do not target alpha major versions. A compatibility spike must verify Server worker lifecycle, sockets, TLS and extensions before implementing broad packaging features.
+Реализовано и локально проверено: сборка PHAR, metadata и SBOM, detached Ed25519 signatures, строгая проверка JWS, активация/renew/release client, приватный state store, fail-closed startup, graceful expiry shutdown и проверки обновления release. License API проверен локальными unit и PostgreSQL integration тестами.
 
-### ADR-003: Signed online activation lease
-
-Chosen direction: online activation revalidated every 24 hours, with up to seven days offline after the last successful check. Leases are server-signed and valid for no more than seven days; the server private signing key must stay outside generated executables. The activation protocol, privacy terms and legal license terms remain open.
-
-## Delivery stages and readiness
-
-1. Toolchain compatibility spike: x86-64 Server 7 build, PHP/extensions probe, two-worker HTTP/TLS and SIGINT passed in a `scratch` container without system libraries. Production certificate loading, ARM64 and network/proxy behavior remain open.
-2. CLI build pipeline: manifest and lock metadata validation, pinned builder, executable artifact, SPDX 2.3 SBOM and hashes are implemented. `composer check` validates generated SBOM fixtures against the pinned official SPDX 2.3.1 JSON Schema and rejects a malformed document; semantic SPDX validation and verification by a separately maintained artifact verifier remain open. Traversal, symlink, development dependency and missing-extension cases have fixture coverage.
-3. **Подпись артефактов:** Ed25519 подпись комплекта и отказ при изменении бинарника, metadata или SBOM покрыты тестами. Provenance attestations, безопасная операционная процедура хранения/ротации release keys и анализ воспроизводимости ещё нужны.
-4. **Модель lease:** строгая проверка Ed25519-подписи и привязки к продукту, версии и установке реализована и покрыта локальными регрессионными тестами. Осталось реализовать mock API, безопасное атомарное хранилище, timeout/retry, отзыв, runtime enforcement, границы офлайн-режима и тесты отката часов.
-5. Release: supported-target artifacts and clean-host checks for each target, CI matrix, docs, support/rollback runbook and explicit legal review of binary distribution terms.
-
-Ready means no source PHP runtime on clean targets, HTTP/TCP and graceful shutdown pass on both architectures, malformed/tampered metadata fails closed, no signing secret ships in artifact, SBOM/signature verify, and a fresh independent build/review passes. No stage is complete based on configuration or compilation alone.
+До клиентского выпуска остаются: настроить приватный Git remote и CI для License API; развернуть HTTPS ingress с ограничением request body до 8 KiB до PHP; создать production KMS Ed25519 key и публичный key ID; провести реальное activation/renew/revoke E2E тестирование; проверить чистую сборку реального static-php-cli на Linux x86-64 и поддерживаемых окружениях; утвердить пользовательские условия лицензии и retention policy. Не считать исходники защищёнными от извлечения.

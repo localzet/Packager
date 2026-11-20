@@ -49,6 +49,8 @@ final class Manifest
     private array $composerPackages;
     /** @var array<string, string> */
     private array $projectRequirements;
+    /** @var array{product_id:string,release_id:string,product_version:string,api_url:string,trusted_keys:array<string,string>}|null */
+    private ?array $licenseConfig;
 
     /** @param list<string> $extensions */
     private function __construct(
@@ -67,6 +69,7 @@ final class Manifest
         ?string $projectVersion,
         array $composerPackages,
         array $projectRequirements,
+        ?array $licenseConfig,
     ) {
         $this->manifestPath = $manifestPath;
         $this->projectRoot = $projectRoot;
@@ -83,6 +86,7 @@ final class Manifest
         $this->projectVersion = $projectVersion;
         $this->composerPackages = $composerPackages;
         $this->projectRequirements = $projectRequirements;
+        $this->licenseConfig = $licenseConfig;
     }
 
     public static function load(string $path): self
@@ -144,6 +148,7 @@ final class Manifest
             throw new InvalidArgumentException('php_version must use an exact major.minor.patch version.');
         }
         $composer = self::validateComposerProject($projectRoot);
+        $licenseConfig = self::validateLicenseConfig($data['license'] ?? null, $extensions, $composer['packages']);
         $outputPath = self::resolveOutput($manifestDir, self::requiredString($data, 'output'));
         if (self::isWithin($outputPath, $projectRoot)) {
             throw new InvalidArgumentException('Build output must be outside the packaged project tree.');
@@ -165,6 +170,7 @@ final class Manifest
             $composer['version'],
             $composer['packages'],
             $composer['requirements'],
+            $licenseConfig,
         );
     }
 
@@ -186,6 +192,94 @@ final class Manifest
     public function composerPackages(): array { return $this->composerPackages; }
     /** @return array<string, string> */
     public function projectRequirements(): array { return $this->projectRequirements; }
+    /** @return array{product_id:string,release_id:string,product_version:string,api_url:string,trusted_keys:array<string,string>}|null */
+    public function licenseConfig(): ?array { return $this->licenseConfig; }
+
+    /** @param list<array<string, mixed>> $packages
+     *  @return array{product_id:string,release_id:string,product_version:string,api_url:string,trusted_keys:array<string,string>}|null
+     */
+    private static function validateLicenseConfig(mixed $license, array $extensions, array $packages): ?array
+    {
+        if ($license === null) {
+            return null;
+        }
+        if (!is_array($license) || array_is_list($license)
+            || !self::hasExactKeys($license, ['product_id', 'release_id', 'product_version', 'api_url', 'trusted_keys'])
+        ) {
+            throw new InvalidArgumentException('license must contain product_id, release_id, product_version, api_url and trusted_keys.');
+        }
+
+        $productId = self::requiredString($license, 'product_id');
+        $releaseId = self::requiredString($license, 'release_id');
+        $productVersion = self::requiredString($license, 'product_version');
+        $apiUrl = self::requiredString($license, 'api_url');
+        $trustedKeys = $license['trusted_keys'];
+        if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/D', $productId) !== 1
+            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/D', $releaseId) !== 1
+            || preg_match('/^[A-Za-z0-9][A-Za-z0-9.+_-]{0,79}$/D', $productVersion) !== 1
+        ) {
+            throw new InvalidArgumentException('License product and release identifiers contain unsupported characters.');
+        }
+
+        $url = parse_url($apiUrl);
+        if (filter_var($apiUrl, FILTER_VALIDATE_URL) === false
+            || !is_array($url)
+            || ($url['scheme'] ?? null) !== 'https'
+            || !is_string($url['host'] ?? null)
+            || isset($url['user']) || isset($url['pass']) || isset($url['query']) || isset($url['fragment'])
+            || !in_array($url['path'] ?? '', ['', '/'], true)
+        ) {
+            throw new InvalidArgumentException('license.api_url must be an HTTPS origin without credentials, path, query or fragment.');
+        }
+
+        if (!is_array($trustedKeys) || array_is_list($trustedKeys) || $trustedKeys === [] || count($trustedKeys) > 8) {
+            throw new InvalidArgumentException('license.trusted_keys must map one to eight key IDs to base64 Ed25519 public keys.');
+        }
+        foreach ($trustedKeys as $keyId => $encodedKey) {
+            if (!is_string($keyId) || preg_match('/^[A-Za-z0-9_-]{43}$/D', $keyId) !== 1 || !is_string($encodedKey)) {
+                throw new InvalidArgumentException('License trusted key IDs must be unpadded base64url SHA-256 values.');
+            }
+            $publicKey = base64_decode($encodedKey, true);
+            if (!is_string($publicKey) || base64_encode($publicKey) !== $encodedKey
+                || strlen($publicKey) !== SODIUM_CRYPTO_SIGN_PUBLICKEYBYTES
+                || !hash_equals($keyId, rtrim(strtr(base64_encode(hash('sha256', $publicKey, true)), '+/', '-_'), '='))
+            ) {
+                throw new InvalidArgumentException("License trusted public key does not match its key ID: {$keyId}");
+            }
+        }
+
+        $declaredExtensions = array_map('strtolower', $extensions);
+        $missingExtensions = array_diff(['curl', 'pcntl', 'posix', 'sodium'], $declaredExtensions);
+        if ($missingExtensions !== []) {
+            throw new InvalidArgumentException('Licensed binaries must include these PHP extensions: ' . implode(', ', $missingExtensions) . '.');
+        }
+        foreach ($packages as $package) {
+            if (strtolower((string)($package['name'] ?? '')) === 'localzet/server') {
+                $version = (string)($package['version'] ?? '');
+                if (preg_match('/^v?(\d+)(?:\.|$)/', $version, $versionMatch) !== 1 || (int)$versionMatch[1] < 7) {
+                    throw new InvalidArgumentException('License enforcement requires Localzet Server 7 or newer in composer.lock.');
+                }
+                return [
+                    'product_id' => $productId,
+                    'release_id' => $releaseId,
+                    'product_version' => $productVersion,
+                    'api_url' => rtrim($apiUrl, '/'),
+                    'trusted_keys' => $trustedKeys,
+                ];
+            }
+        }
+
+        throw new InvalidArgumentException('License enforcement requires localzet/server in the locked Composer dependency graph.');
+    }
+
+    /** @param array<string, mixed> $data @param list<string> $expected */
+    private static function hasExactKeys(array $data, array $expected): bool
+    {
+        $actual = array_keys($data);
+        sort($actual);
+        sort($expected);
+        return $actual === $expected;
+    }
 
     /** @return array{hash:?string,name:string,version:?string,packages:list<array<string,mixed>>,requirements:array<string,string>} */
     private static function validateComposerProject(string $root): array

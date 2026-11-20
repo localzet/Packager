@@ -27,7 +27,9 @@ require dirname(__DIR__) . '/vendor/autoload.php';
 
 use Localzet\Packager\ArtifactSignature;
 use Localzet\Packager\BuildCommand;
+use Localzet\Packager\LicenseApiClient;
 use Localzet\Packager\LicenseLease;
+use Localzet\Packager\LicenseStore;
 use Localzet\Packager\Manifest;
 
 function expect(bool $condition, string $message): void
@@ -62,18 +64,56 @@ function runCli(array $arguments): array
     return [proc_close($process), (string)$stdout . (string)$stderr];
 }
 
+/** @return array{int,string} */
+function runArtifact(string $path, array $environmentOverrides = []): array
+{
+    $environment = getenv();
+    $environment = is_array($environment) ? array_replace($environment, $environmentOverrides) : $environmentOverrides;
+    $process = proc_open([PHP_BINARY, $path], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+    if (!is_resource($process)) {
+        throw new RuntimeException('Could not start the packaged artifact test process.');
+    }
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($process), (string)$stdout . (string)$stderr];
+}
+
+/** @return array{int,string} */
+function runExecutable(string $path, array $environmentOverrides = []): array
+{
+    $environment = getenv();
+    $environment = is_array($environment) ? array_replace($environment, $environmentOverrides) : $environmentOverrides;
+    $process = proc_open([$path], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
+    if (!is_resource($process)) {
+        throw new RuntimeException('Could not start the standalone executable test process.');
+    }
+    fclose($pipes[0]);
+    $stdout = stream_get_contents($pipes[1]);
+    $stderr = stream_get_contents($pipes[2]);
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+    return [proc_close($process), (string)$stdout . (string)$stderr];
+}
+
 $root = sys_get_temp_dir() . '/localzet-packager-test-' . bin2hex(random_bytes(6));
 mkdir($root, 0700);
 mkdir($root . '/project', 0700);
 mkdir($root . '/project/vendor/composer', 0700, true);
 mkdir($root . '/output', 0700);
-file_put_contents($root . '/project/server.php', "<?php echo 'packaged-ok';\n");
+    file_put_contents($root . '/project/server.php', "<?php echo 'packaged-ok';\n");
 file_put_contents($root . '/project/.env', "SECRET=must-not-be-packaged\n");
 file_put_contents($root . '/project/composer.json', '{"name":"fixture/application","require":{"fixture/runtime":"1.0.0"}}');
 file_put_contents($root . '/project/composer.lock', '{"packages":[{"name":"fixture/runtime","version":"1.0.0","require":{"fixture/transitive":"^1.0"}},{"name":"fixture/transitive","version":"1.2.0"}],"packages-dev":[]}');
 file_put_contents($root . '/project/vendor/autoload.php', "<?php\n");
 file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false},{"name":"fixture/transitive","version":"1.2.0","dev_requirement":false}]}');
-$fakeRuntime = json_encode(['php' => PHP_VERSION, 'extensions' => ['phar', 'pcntl', 'posix', 'sockets']], JSON_THROW_ON_ERROR);
+$fakeRuntime = json_encode([
+    'php' => PHP_VERSION,
+    'extensions' => ['curl', 'phar', 'pcntl', 'posix', 'sodium', 'sockets'],
+    'functions' => ['proc_open' => true],
+], JSON_THROW_ON_ERROR);
 file_put_contents($root . '/micro.sfx', "#!/bin/sh\necho 'LOCALZET_PACKAGER_RUNTIME={$fakeRuntime}'\nexit 0\n");
 chmod($root . '/micro.sfx', 0700);
 file_put_contents($root . '/fake-spc', <<<'PHP'
@@ -148,34 +188,32 @@ try {
     $leasePair = sodium_crypto_sign_keypair();
     $leaseSecretKey = sodium_crypto_sign_secretkey($leasePair);
     $leasePublicKey = sodium_crypto_sign_publickey($leasePair);
-    $leaseKeyId = hash('sha256', $leasePublicKey);
+    $base64Url = static fn (string $value): string => rtrim(strtr(base64_encode($value), '+/', '-_'), '=');
+    $leaseKeyId = $base64Url(hash('sha256', $leasePublicKey, true));
     $leaseTrustedKeys = [$leaseKeyId => base64_encode($leasePublicKey)];
     $leaseNow = 2_000_000_000;
+    $leaseRenewAfter = $leaseNow + 86_400;
     $leasePayload = [
-        'schema_version' => 1,
-        'algorithm' => 'Ed25519',
-        'key_id' => $leaseKeyId,
+        'iss' => LicenseLease::ISSUER,
+        'aud' => 'localzet/server',
+        'sub' => 'license-0123456789abcdef',
+        'activation_id' => 'activation-0123456789abcdef',
         'product_id' => 'localzet/server',
         'release_id' => '7.0.0',
         'installation_id' => 'install-0123456789abcdef',
-        'issued_at' => $leaseNow,
-        'expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+        'product_version' => '7.0.0',
+        'iat' => $leaseNow,
+        'nbf' => $leaseNow,
+        'exp' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+        'renew_after' => $leaseRenewAfter,
+        'jti' => 'lease-0123456789abcdef',
     ];
-    $makeLease = static function (array $overrides = []) use ($leasePayload, $leaseSecretKey): string {
+    $makeLease = static function (array $overrides = [], array $headerOverrides = []) use ($leasePayload, $leaseSecretKey, $leaseKeyId, $base64Url): string {
         $payload = array_replace($leasePayload, $overrides);
-        $canonical = [
-            'schema_version' => $payload['schema_version'],
-            'algorithm' => $payload['algorithm'],
-            'key_id' => $payload['key_id'],
-            'product_id' => $payload['product_id'],
-            'release_id' => $payload['release_id'],
-            'installation_id' => $payload['installation_id'],
-            'issued_at' => $payload['issued_at'],
-            'expires_at' => $payload['expires_at'],
-        ];
-        $signed = json_encode($canonical, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
-        $signature = sodium_crypto_sign_detached($signed, $leaseSecretKey);
-        return json_encode(['payload' => $payload, 'signature' => base64_encode($signature)], JSON_THROW_ON_ERROR);
+        $header = array_replace(['alg' => 'EdDSA', 'kid' => $leaseKeyId, 'typ' => 'JWT'], $headerOverrides);
+        $signingInput = $base64Url(json_encode($header, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)) . '.'
+            . $base64Url(json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
+        return $signingInput . '.' . $base64Url(sodium_crypto_sign_detached($signingInput, $leaseSecretKey));
     };
     $validLease = LicenseLease::verify(
         $makeLease(),
@@ -186,17 +224,48 @@ try {
         $leaseNow,
     );
     expect($validLease->expiresAt() === $leaseNow + LicenseLease::MAX_TTL_SECONDS, 'A seven-day signed license lease was rejected.');
-    expect(!$validLease->shouldRevalidateAt($leaseNow + 86_399), 'Lease revalidation became due before 24 hours.');
-    expect($validLease->shouldRevalidateAt($leaseNow + LicenseLease::REVALIDATION_INTERVAL_SECONDS), 'Lease revalidation was not due at 24 hours.');
+    expect($validLease->productVersion() === '7.0.0', 'Lease product version was not retained.');
+    expect($validLease->activationId() === 'activation-0123456789abcdef', 'Lease activation ID was not retained.');
+    expect(!$validLease->shouldRevalidateAt($leaseRenewAfter - 1), 'Lease revalidation became due before its signed jitter deadline.');
+    expect($validLease->shouldRevalidateAt($leaseRenewAfter), 'Lease revalidation was not due at its signed jitter deadline.');
+    $shortLicenseExpiresAt = $leaseNow + 3_600;
+    $shortLicenseLease = LicenseLease::verify(
+        $makeLease([
+            'iat' => $leaseNow,
+            'nbf' => $leaseNow,
+            'exp' => $shortLicenseExpiresAt,
+            'renew_after' => $shortLicenseExpiresAt,
+        ]),
+        $leaseTrustedKeys,
+        'localzet/server',
+        '7.0.0',
+        'install-0123456789abcdef',
+        $leaseNow,
+    );
+    expect($shortLicenseLease->renewAfter() === $shortLicenseExpiresAt, 'Lease rejected an API deadline equal to an early license expiry.');
+    $upgradeLease = LicenseLease::verify(
+        $makeLease(),
+        $leaseTrustedKeys,
+        'localzet/server',
+        '7.1.0',
+        'install-0123456789abcdef',
+        $leaseNow,
+        allowReleaseChangeForRenewal: true,
+    );
+    expect($upgradeLease->releaseId() === '7.0.0', 'A previous release lease could not be verified for an online upgrade renewal.');
     $skewedLease = $makeLease([
-        'issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
-        'expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+        'iat' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+        'nbf' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+        'exp' => $leaseNow + LicenseLease::MAX_TTL_SECONDS,
+        'renew_after' => $leaseRenewAfter + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
     ]);
     LicenseLease::verify($skewedLease, $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow);
     expectLeaseFailure(
         static fn() => LicenseLease::verify($makeLease([
-            'issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
-            'expires_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + LicenseLease::MAX_TTL_SECONDS,
+            'iat' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+            'nbf' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
+            'exp' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + LicenseLease::MAX_TTL_SECONDS,
+            'renew_after' => $leaseRenewAfter + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS,
         ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'Future-issued lease exceeded the seven-day offline window from verification time.',
     );
@@ -207,6 +276,10 @@ try {
     expectLeaseFailure(
         static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/server', '7.0.1', 'install-0123456789abcdef', $leaseNow),
         'License lease was accepted for a different release.',
+    );
+    expectLeaseFailure(
+        static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow, '7.0.1'),
+        'License lease was accepted for a different product version.',
     );
     expectLeaseFailure(
         static fn() => LicenseLease::verify($makeLease(), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-other', $leaseNow),
@@ -221,31 +294,41 @@ try {
         'License lease with an extra payload field was accepted.',
     );
     expectLeaseFailure(
-        static fn() => LicenseLease::verify($makeLease(['expires_at' => $leaseNow + LicenseLease::MAX_TTL_SECONDS + 1]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify($makeLease(['exp' => $leaseNow + LicenseLease::MAX_TTL_SECONDS + 1]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'License lease exceeded the seven-day maximum TTL.',
     );
     expectLeaseFailure(
-        static fn() => LicenseLease::verify($makeLease(['issued_at' => $leaseNow - 3_600, 'expires_at' => $leaseNow]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify($makeLease([
+            'iat' => $leaseNow - 3_600,
+            'nbf' => $leaseNow - 3_600,
+            'exp' => $leaseNow,
+            'renew_after' => $leaseNow - 1,
+        ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'Expired license lease was accepted.',
     );
     expectLeaseFailure(
-        static fn() => LicenseLease::verify($makeLease(['issued_at' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + 1]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify($makeLease([
+            'iat' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + 1,
+            'nbf' => $leaseNow + LicenseLease::FUTURE_ISSUED_AT_SKEW_SECONDS + 1,
+        ]), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'License lease with a future issue time was accepted.',
     );
-    $tamperedLease = json_decode($makeLease(), true, 16, JSON_THROW_ON_ERROR);
-    $tamperedLease['payload']['release_id'] = '7.0.1';
+    $tamperedLease = explode('.', $makeLease());
+    $tamperedPayload = $leasePayload;
+    $tamperedPayload['release_id'] = '7.0.1';
+    $tamperedLease[1] = $base64Url(json_encode($tamperedPayload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
     expectLeaseFailure(
-        static fn() => LicenseLease::verify(json_encode($tamperedLease, JSON_THROW_ON_ERROR), $leaseTrustedKeys, 'localzet/server', '7.0.1', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify(implode('.', $tamperedLease), $leaseTrustedKeys, 'localzet/server', '7.0.1', 'install-0123456789abcdef', $leaseNow),
         'Tampered license lease payload was accepted.',
     );
-    $badSignature = json_decode($makeLease(), true, 16, JSON_THROW_ON_ERROR);
-    $badSignature['signature'] = base64_encode(random_bytes(SODIUM_CRYPTO_SIGN_BYTES));
+    $badSignature = explode('.', $makeLease());
+    $badSignature[2] = $base64Url(random_bytes(SODIUM_CRYPTO_SIGN_BYTES));
     expectLeaseFailure(
-        static fn() => LicenseLease::verify(json_encode($badSignature, JSON_THROW_ON_ERROR), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify(implode('.', $badSignature), $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'Invalid Ed25519 license lease signature was accepted.',
     );
     expectLeaseFailure(
-        static fn() => LicenseLease::verify('{"payload":[],"signature":""}', $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
+        static fn() => LicenseLease::verify('not.a.valid.jws', $leaseTrustedKeys, 'localzet/server', '7.0.0', 'install-0123456789abcdef', $leaseNow),
         'Malformed license lease payload was accepted.',
     );
     sodium_memzero($leaseSecretKey);
@@ -333,6 +416,191 @@ try {
     fclose($pipes[1]);
     fclose($pipes[2]);
     expect(proc_close($run) === 0 && trim((string)$stdout) === 'packaged-ok', 'Packaged PHAR did not execute: ' . (string)$stderr);
+
+    $licensedComposer = [
+        'packages' => [
+            ['name' => 'fixture/runtime', 'version' => '1.0.0', 'require' => ['fixture/transitive' => '^1.0']],
+            ['name' => 'fixture/transitive', 'version' => '1.2.0'],
+            ['name' => 'localzet/server', 'version' => '7.0.0'],
+        ],
+        'packages-dev' => [],
+    ];
+    file_put_contents($root . '/project/composer.json', '{"name":"fixture/application","require":{"fixture/runtime":"1.0.0","localzet/server":"^7.0"}}');
+    file_put_contents($root . '/project/composer.lock', json_encode($licensedComposer, JSON_THROW_ON_ERROR));
+    file_put_contents($root . '/project/vendor/composer/installed.json', json_encode([
+        'dev' => false,
+        'packages' => [
+            ['name' => 'fixture/runtime', 'version' => '1.0.0', 'dev_requirement' => false],
+            ['name' => 'fixture/transitive', 'version' => '1.2.0', 'dev_requirement' => false],
+            ['name' => 'localzet/server', 'version' => '7.0.0', 'dev_requirement' => false],
+        ],
+    ], JSON_THROW_ON_ERROR));
+    file_put_contents($root . '/project/vendor/autoload.php', <<<'PHP'
+<?php
+namespace localzet;
+final class Server
+{
+    private static array $workerStartCallbacks = [];
+    public static function onWorkerStart(callable $callback): void { self::$workerStartCallbacks[] = $callback; }
+    public static function requestShutdown(int $code = 0, mixed $log = ''): void {}
+    public static function runAll(): void
+    {
+        $uid = getenv('PACKAGER_TEST_WORKER_UID');
+        if (is_string($uid) && $uid !== '') {
+            $account = posix_getpwuid((int)$uid);
+            if (posix_geteuid() !== 0 || !is_array($account)
+                || !posix_setgid((int)$account['gid'])
+                || !posix_setuid((int)$account['uid'])
+            ) {
+                throw new \RuntimeException('Could not simulate the Server worker user.');
+            }
+        }
+        foreach (self::$workerStartCallbacks as $callback) {
+            $callback();
+        }
+    }
+}
+final class Timer
+{
+    public static function add(float $interval, callable $callback, ?array $arguments = [], bool $persistent = true): int { return 1; }
+    public static function del(int $timerId): bool { return true; }
+}
+PHP
+    );
+    $licenseConfig = [
+        'product_id' => 'localzet.server',
+        'release_id' => '7.0.0',
+        'product_version' => '7.0.0',
+        'api_url' => 'https://licenses.example.test',
+        'trusted_keys' => $leaseTrustedKeys,
+    ];
+    $licensedManifest = $manifest;
+    $licensedManifest['extensions'] = ['curl', 'phar', 'pcntl', 'posix', 'sodium', 'sockets'];
+    $licensedManifest['license'] = $licenseConfig;
+    $licensedManifest['output'] = 'output/licensed-server.phar';
+    $realSpc = getenv('PACKAGER_TEST_SPC');
+    $realMicro = getenv('PACKAGER_TEST_MICRO');
+    $usesRealMicro = is_string($realSpc) && $realSpc !== '' && is_string($realMicro) && $realMicro !== '';
+    if ($usesRealMicro) {
+        $licensedManifest['toolchain'] = [
+            'spc' => $realSpc,
+            'micro' => $realMicro,
+            'version' => (string)(getenv('PACKAGER_TEST_SPC_VERSION') ?: '2.8.6'),
+        ];
+        $licensedManifest['php_version'] = (string)(getenv('PACKAGER_TEST_PHP_VERSION') ?: PHP_VERSION);
+    }
+    file_put_contents($root . '/project/server.php', "<?php \\localzet\\Server::runAll(); echo 'packaged-ok';\n");
+    file_put_contents($root . '/licensed-packager.json', json_encode($licensedManifest, JSON_THROW_ON_ERROR));
+    $loadedLicensedManifest = Manifest::load($root . '/licensed-packager.json');
+    expect($loadedLicensedManifest->licenseConfig() === $licenseConfig, 'Licensed manifest configuration was not retained.');
+    $licensedResult = (new BuildCommand())->run($loadedLicensedManifest);
+    if (!$usesRealMicro) {
+        $licensedPhar = new Phar($licensedResult['binary']);
+        expect($licensedPhar->offsetExists('__localzet/license/LicenseRuntime.php'), 'Licensed archive omitted its runtime enforcement code.');
+        expect(str_contains($licensedPhar->getStub(), 'handleCommand'), 'Licensed archive stub omitted its license command handler.');
+    }
+
+    $previousLicenseDirectory = getenv('LOCALZET_LICENSE_DIR');
+    $runLicensedArtifact = $usesRealMicro ? 'runExecutable' : 'runArtifact';
+    putenv('LOCALZET_LICENSE_DIR=' . $root . '/empty-license-state');
+    [$unactivatedExit, $unactivatedOutput] = $runLicensedArtifact($licensedResult['binary']);
+    expect($unactivatedExit === 78 && str_contains($unactivatedOutput, 'No valid license activation'), 'Licensed artifact started without an activation: ' . $unactivatedOutput);
+    expect(!is_dir($root . '/empty-license-state/localzet-license/localzet.server'), 'An unactivated root startup created state owned by the wrong service user.');
+
+    putenv('LOCALZET_LICENSE_DIR=' . $root . '/active-license-state');
+    $licenseStore = LicenseStore::forProduct($licenseConfig);
+    $nextReleaseConfig = $licenseConfig;
+    $nextReleaseConfig['release_id'] = '7.0.1';
+    expect(LicenseStore::forProduct($nextReleaseConfig)->directory() === $licenseStore->directory(), 'A release upgrade changed the persistent installation identity path.');
+    $runtimeNow = time();
+    $runtimeLease = $makeLease([
+        'aud' => 'localzet.server',
+        'product_id' => 'localzet.server',
+        'iat' => $runtimeNow - 1,
+        'nbf' => $runtimeNow - 1,
+        'exp' => $runtimeNow + 3_600,
+        'renew_after' => $runtimeNow + 1_800,
+    ]);
+    $runtimeVerifiedLease = LicenseLease::verify(
+        $runtimeLease,
+        $leaseTrustedKeys,
+        'localzet.server',
+        '7.0.0',
+        'install-0123456789abcdef',
+        expectedProductVersion: '7.0.0',
+    );
+    $licenseStore->update(function (array &$state) use ($runtimeLease, $runtimeVerifiedLease): void {
+        $state['installation_id'] = 'install-0123456789abcdef';
+        $state['access_token'] = 'act_' . str_repeat('A', 40);
+        $state['lease'] = $runtimeLease;
+        $state['activation_id'] = $runtimeVerifiedLease->activationId();
+    });
+    expect((fileperms($licenseStore->directory()) & 0777) === 0700, 'License state directory is not owner-only.');
+    expect((fileperms($licenseStore->directory() . '/license-state.json') & 0777) === 0600, 'License state file is not owner-only.');
+    [$activatedExit, $activatedOutput] = $runLicensedArtifact($licensedResult['binary']);
+    expect($activatedExit === 0 && trim($activatedOutput) === 'packaged-ok', 'Licensed artifact rejected a valid signed lease: ' . $activatedOutput);
+
+    if (getenv('PACKAGER_TEST_PRIVILEGED') === '1') {
+        $worker = posix_getpwnam('nobody');
+        expect(posix_geteuid() === 0 && is_array($worker), 'Privileged worker ownership test requires root and the nobody account.');
+        $workerStateBase = $root . '/worker-license-state';
+        putenv('LOCALZET_LICENSE_DIR=' . $workerStateBase);
+        $workerStore = LicenseStore::forProduct($licenseConfig);
+        $workerStore->update(function (array &$state) use ($runtimeLease, $runtimeVerifiedLease): void {
+            $state['installation_id'] = 'install-0123456789abcdef';
+            $state['access_token'] = 'act_' . str_repeat('A', 40);
+            $state['lease'] = $runtimeLease;
+            $state['activation_id'] = $runtimeVerifiedLease->activationId();
+        });
+        chmod($root, 0711);
+        foreach ([$workerStateBase, $workerStateBase . '/localzet-license', $workerStore->directory()] as $directory) {
+            expect(chown($directory, (int)$worker['uid']) && chgrp($directory, (int)$worker['gid']) && chmod($directory, 0700), 'Could not prepare the worker-owned license directory.');
+        }
+        foreach ([$workerStore->directory() . '/license-state.json', $workerStore->directory() . '/license-state.lock'] as $file) {
+            expect(chown($file, (int)$worker['uid']) && chgrp($file, (int)$worker['gid']) && chmod($file, 0600), 'Could not prepare worker-owned license state files.');
+        }
+        [$workerExit, $workerOutput] = $runLicensedArtifact($licensedResult['binary'], [
+            'LOCALZET_LICENSE_DIR' => $workerStateBase,
+            'PACKAGER_TEST_WORKER_UID' => (string)$worker['uid'],
+        ]);
+        expect($workerExit === 0 && trim($workerOutput) === 'packaged-ok', 'Licensed artifact could not read worker-owned state after dropping privileges: ' . $workerOutput);
+    }
+
+    $licenseStore->update(static function (array &$state): void {
+        $state['rejected'] = true;
+    });
+    [$revokedExit, $revokedOutput] = $runLicensedArtifact($licensedResult['binary']);
+    expect($revokedExit === 78 && str_contains($revokedOutput, 'rejected by the License API'), 'Licensed artifact ignored a rejected activation.');
+    $licenseStore->update(function (array &$state) use ($makeLease, $runtimeNow): void {
+        $state['rejected'] = false;
+        $state['lease'] = $makeLease([
+            'aud' => 'localzet.server',
+            'product_id' => 'localzet.server',
+            'iat' => $runtimeNow - 3_601,
+            'nbf' => $runtimeNow - 3_601,
+            'exp' => $runtimeNow - 1,
+            'renew_after' => $runtimeNow - 1_800,
+        ]);
+    });
+    [$expiredExit, $expiredOutput] = $runLicensedArtifact($licensedResult['binary']);
+    expect($expiredExit === 78 && str_contains($expiredOutput, 'needs an online license renewal'), 'Licensed artifact started with an expired lease.');
+    if (is_string($previousLicenseDirectory)) {
+        putenv('LOCALZET_LICENSE_DIR=' . $previousLicenseDirectory);
+    } else {
+        putenv('LOCALZET_LICENSE_DIR');
+    }
+
+    file_put_contents($root . '/project/composer.json', '{"name":"fixture/application","require":{"fixture/runtime":"1.0.0"}}');
+    file_put_contents($root . '/project/composer.lock', '{"packages":[{"name":"fixture/runtime","version":"1.0.0","require":{"fixture/transitive":"^1.0"}},{"name":"fixture/transitive","version":"1.2.0"}],"packages-dev":[]}');
+    file_put_contents($root . '/project/vendor/composer/installed.json', '{"dev":false,"packages":[{"name":"fixture/runtime","version":"1.0.0","dev_requirement":false},{"name":"fixture/transitive","version":"1.2.0","dev_requirement":false}]}');
+    file_put_contents($root . '/project/vendor/autoload.php', "<?php\n");
+
+    try {
+        new LicenseApiClient('http://licenses.example.test');
+        throw new RuntimeException('License API client accepted a non-HTTPS endpoint.');
+    } catch (RuntimeException $exception) {
+        expect(str_contains($exception->getMessage(), 'HTTPS'), 'API endpoint validation failed for an unexpected reason.');
+    }
 
     $manifest['extensions'][] = 'ctype';
     $manifest['output'] = 'output/missing-extension';

@@ -37,6 +37,55 @@ composer install --no-dev --no-scripts --no-plugins --prefer-dist --no-interacti
 
 Пути `project.root`, `toolchain.spc`, `toolchain.micro` и `output` вычисляются относительно каталога manifest. Entry point обязан находиться внутри каталога проекта. Если в проекте есть `composer.json`, требуются корректные `composer.lock`, `vendor/autoload.php` и `vendor/composer/installed.json`. Состав, версии и доступные source/dist references production-пакетов в `vendor/` сверяются с `composer.lock`; dev-зависимости и расхождения останавливают сборку. SHA-256 lockfile записывается в metadata. Результат нельзя размещать внутри исходного дерева. Существующие artifact и manifest не перезаписываются.
 
+### Лицензированная сборка
+
+Добавьте в manifest объект `license`, если бинарник должен требовать онлайн-активацию. Product/release ID принимают буквы, цифры, точку, `_` и `-`; `product_version` — версия приложения. `api_url` задаёт HTTPS origin без пути. `trusted_keys` связывает `kid` из License API с открытым Ed25519 ключом в стандартном base64:
+
+```jsonc
+"license": {
+  "product_id": "my-application",
+  "release_id": "7.1.0",
+  "product_version": "7.1.0",
+  "api_url": "https://license-api.example.com",
+  "trusted_keys": {
+    "KID_FROM_SIGNER_PUBLIC_KEY_COMMAND": "BASE64_RAW_ED25519_PUBLIC_KEY"
+  }
+}
+```
+
+Значения в `trusted_keys` — placeholders. Получите их из команды `signer:public-key` в License API, проверьте источник по доверенному каналу и подставьте в manifest. `kid` — SHA-256 открытого ключа в unpadded base64url; поле `public_key` команды — стандартный base64. Никогда не включайте в manifest license key, access token, HMAC secret или закрытый ключ подписи.
+
+Для лицензированной сборки target runtime должен включать `curl`, `pcntl`, `posix` и `sodium`, а `proc_open` должен быть доступен. Composer lock должен содержать Localzet Server 7 или новее. Проверьте актуальное состояние локального API перед выпуском: пока его production endpoint, ingress и KMS не настроены, конечные лицензии нельзя считать проверенными реальным сервисом.
+
+Сначала активируйте бинарник. Ключ подаётся через stdin, чтобы он не оказался в аргументах процесса или shell history:
+
+```bash
+read -r -s -p "License key: " LICENSE_KEY
+printf '\n'
+printf '%s\n' "$LICENSE_KEY" | ./dist/my-application --license-activate
+unset LICENSE_KEY
+```
+
+Активация создаёт случайный ID установки и сохраняет access token с подписанной lease в `$XDG_STATE_HOME/localzet-license/<product_id>` либо `$HOME/.local/state/localzet-license/<product_id>`. Переопределите базовый каталог переменной `LOCALZET_LICENSE_DIR`, если служебный пользователь использует отдельный state directory. Каталог получает режим `0700`, файлы — `0600`; путь должен оставаться постоянным между обновлениями бинарника.
+
+Запускайте бинарник от того же системного пользователя, который владеет каталогом лицензии. Если master запускается от root и Server затем сбрасывает привилегии через `Server::$user`, заранее создайте каталог лицензии для worker-пользователя и активируйте бинарник от этого пользователя. Не активируйте его от root для worker-а с другим UID.
+
+Для такого режима задайте постоянный базовый каталог и активируйте продукт от пользователя worker-а:
+
+```bash
+sudo install -d -o appuser -g appgroup -m 0700 /var/lib/my-application
+read -r -s -p "License key: " LICENSE_KEY
+printf '\n'
+printf '%s\n' "$LICENSE_KEY" | sudo -u appuser env LOCALZET_LICENSE_DIR=/var/lib/my-application ./dist/my-application --license-activate
+unset LICENSE_KEY
+```
+
+Укажите тот же `LOCALZET_LICENSE_DIR` в окружении master-процесса. Первый запуск без активации не создаёт каталог состояния; это позволяет активировать лицензию от правильного пользователя после неудачной проверки запуска.
+
+Lease ограничивает срок офлайн-работы семью днями. Клиент запускает renewal в отдельном процессе по подписанному сроку проверки, не блокируя event loop; worker проверяет отказ API и срок lease, затем запрашивает штатное завершение Server. Если лицензия истекла или новый release/product version требует перепривязки, бинарник синхронно запросит renewal до запуска приложения. Для ручной попытки после восстановления сети используйте `./dist/my-application --license-renew`; `./dist/my-application --license-release` отзывает активацию через API. При истёкшем API/лицензии запуск блокируется. Часы на целевом сервере должны быть синхронизированы.
+
+Изменение release ID или product version требует online renewal перед запуском новой сборки. Старый lease подписан для прежней версии; каталог состояния остаётся общим по product ID, поэтому установка и слот активации не теряются при обновлении.
+
 ## Проверка и сборка
 
 ```sh
@@ -75,5 +124,5 @@ php bin/localzet-packager verify ../dist/my-application /secure/trusted-release.
 - Из каталога исключаются `.git`, IDE-настройки, `node_modules`, `.env*`, `auth.json` и `composer-auth.json`. Остальные файлы проекта, включая тестовые, попадают в PHAR.
 - При наличии `vendor/` упаковщик включает его как есть после проверки метаданных установленного графа. Устанавливайте только production зависимости по lockfile.
 - Ed25519 подпись и проверка целостности реализованы; SBOM проверяется по официальной JSON Schema в тестах. Семантическая проверка SPDX, provenance attestations и воспроизводимые сборки ещё не реализованы.
-- Нет активации, выдачи или проверки лицензий. Не добавляйте секреты, сертификаты или закрытые ключи в проект.
+- Production API и KMS ещё не настроены; выдача клиентских лицензий по реальному сервису пока не проверена. Не добавляйте секреты, сертификаты или закрытые ключи в проект.
 - PHP-исходники остаются извлекаемыми из PHAR. Компоновка с micro SAPI не является шифрованием или защитой от анализа.

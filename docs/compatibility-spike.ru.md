@@ -41,6 +41,8 @@ Packager собрал текущий Server из commit `e82db87e618e4582d290447
 - Воспроизводимость результата на независимых сборочных узлах.
 - Независимая проверка подписанного артефакта и provenance attestations.
 - Семантическая проверка SPDX сверх проверки JSON Schema.
-- Клиент и сервер онлайн-активации, отзыв lease и офлайн-режим до семи дней.
+- Присоединение лицензированного PHAR к реальному static-php-cli: bootstrap и срок lease проверены на JWS fixtures, но не в standalone сборке.
+- Production KMS, ingress и end-to-end обмен реального бинарника с License API. Локальный API проходит unit и PostgreSQL integration наборы.
+- Пользовательские условия лицензии и политика хранения данных.
 
-Эти smoke-проверки не означают готовность Packager к production-релизу. Полные ограничения и критерии выпуска описаны в [архитектуре](architecture.md#delivery-stages-and-readiness); [англоязычный отчёт](compatibility-spike.md) содержит те же технические результаты.
+Эти smoke-проверки не означают готовность Packager к production-релизу. Полные ограничения и критерии выпуска описаны в [архитектуре](architecture.md#release-readiness); [англоязычный отчёт](compatibility-spike.md) содержит те же технические результаты.

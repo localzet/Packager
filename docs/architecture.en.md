@@ -1,16 +1,18 @@
 # Localzet Packager architecture
 
-## Current implementation
+## Current state
 
-The CLI currently targets Linux x86-64. It validates a manifest, a preinstalled production Composer tree and the configured `micro.sfx` runtime, creates a PHAR, and invokes the pinned static-php-cli version to combine the application and runtime. The builder emits an SPDX 2.3 SBOM from the validated production Composer lockfile with known dependency relationships and Composer PURLs; uncertain license data is `NOASSERTION`. Output metadata records hashes for the artifact, SBOM, runtime and Composer lockfile. Separate commands sign the binary, metadata and SBOM as one Ed25519 bundle and verify it against a supplied trusted public key. The [compatibility report](compatibility-spike.md) records one real Server 7 build and its acceptance evidence.
+Packager builds standalone executables for Linux x86-64 from a prepared production Composer graph. It validates the manifest and lockfile, creates a PHAR, probes the actual PHP runtime, and combines it with a pinned static-php-cli version. The output includes metadata, an SPDX 2.3 SBOM and a detached Ed25519 signature bundle.
 
-The signed license lease model validates Ed25519 signatures, product/release/installation identifiers, validity times and a seven-day maximum lifetime. The network client, lease cache, PHAR integration, activation API and enforcement in running processes are not implemented. Provenance attestations, update delivery and additional targets are also not implemented. Child processes are limited to 300 seconds. The rest of this document describes the intended product architecture and delivery stages, not current CLI features.
+Licensed builds include the activation client, strict Ed25519 JWS verification, protected file storage and lease enforcement at startup. The separate License API is implemented in a local private checkout and has unit and PostgreSQL integration coverage. It has not been published or deployed: production ingress, hostname, KMS key and end-to-end binary exchange remain unverified.
 
-## Product context and boundaries
+The [compatibility report](compatibility-spike.md) documents a Server 7 x86-64 smoke. Production TLS, ARM64, reproducible builds and independent artifact analysis are outside that check. PHAR does not encrypt PHP code or prevent reverse engineering.
 
-Packager is intended to turn a PHP application and its locked runtime dependencies into a standalone executable. It is a separate product so it can have its own toolchain, release schedule and commercial distribution controls. The activation service and legal terms for binary distribution are outside the current implementation.
+## Context and boundaries
 
-Target capabilities include project and lockfile validation, target and extension selection, atomic artifact and metadata publication, signature verification, and activation with periodically refreshed signed leases. Non-goals include promising that PHP source cannot be recovered, running an untrusted multi-tenant build farm, billing, or changing the license of source libraries.
+Packager turns a PHP application and its locked dependencies into an executable for the selected target. Builds run on a trusted machine and do not run Composer scripts or application code. Linux x86-64 is the only current target.
+
+Approved license policy: the license determines the activation limit, defaulting to 1; clients revalidate online about every 24 hours with timing jitter; signed leases last no more than seven days. Once a lease expires, the application cannot start or the running Server worker group receives a graceful shutdown request. A new release requires online renewal to bind the lease to the new release and product version.
 
 ## C4 context
 
@@ -18,43 +20,59 @@ Target capabilities include project and lockfile validation, target and extensio
 flowchart LR
   Dev[Application developer] -->|source, lockfile, manifest| P[Localzet Packager]
   P -->|pinned build toolchain| SPC[static-php-cli]
-  P -->|standalone executable| User[Application operator]
-  User -. future activation request .-> License[License API]
-  License -. future signed lease .-> User
+  P -->|executable, SBOM, signature| Ops[Application operator]
+  Ops -->|HTTPS activation / renewal / release| API[License API]
+  API -->|signed Ed25519 lease| Ops
+  API --> DB[(PostgreSQL: HMAC fingerprints)]
+  API --> KMS[AWS KMS: Ed25519 private key]
 ```
+
+The License API source, migrations and OpenAPI contract exist locally. No public HTTPS endpoint or production KMS is configured; this diagram describes the intended operational connection, not a live production service.
 
 ## C4 containers
 
 ```mermaid
 flowchart TB
-  CLI[Packager CLI] --> Validator[Manifest and project validator]
+  CLI[Packager CLI] --> Validator[Manifest and Composer validator]
   CLI --> Builder[PHAR and build orchestrator]
   Builder --> SPC[Version-pinned static-php-cli]
-  Builder --> Metadata[Hashes and runtime metadata]
-  App[Packaged application] -. future .-> Client[License client]
-  Client -. future .-> API[License API]
+  Builder --> Bundle[Executable + metadata + SPDX SBOM]
+  Bundle --> Stub[Licensed PHAR bootstrap]
+  Stub --> Store[Local state 0700 / 0600]
+  Stub --> Client[HTTPS License API client]
+  Client --> API[License API]
+  API --> Database[(PostgreSQL: fingerprints)]
+  API --> Signer[AWS KMS Ed25519 signer]
 ```
 
-## Data and security
+## License flow
 
-The manifest records the project root, entrypoint, target, PHP version, required extensions, tool paths and output path. Packager does not resolve dependencies or execute Composer scripts; operators install production dependencies before the build. The CLI checks Composer lock and installed metadata, rejects dev dependencies, checks paths and symlinks, applies an input-size limit, verifies the toolchain version, and runs a capability probe against `micro.sfx`.
+1. The operator pipes the license key to `--license-activate`. The key is not written to local state; the API uses it to create the activation. Retries reuse the same idempotency key.
+2. The executable stores a random installation ID, access token and lease in a private directory keyed by `product_id`. State survives release upgrades; the directory and files belong to the service user and use modes `0700/0600`.
+3. Before loading the application, the bootstrap verifies the signature, issuer, `kid`, product, release, version, installation ID, expiry and next renewal time. The public key is pinned in the executable.
+4. At the signed `renew_after` time, the client launches a separate process so HTTP does not block the event loop. Each Server worker checks API denial and the current lease once per second; a dedicated timer requests graceful shutdown at expiry.
+5. Network failures permit operation until `exp`. An expired lease, permanent API rejection or release/version change requires successful renewal before startup. Manual `--license-renew` and `--license-release` commands are in the [CLI guide](cli.en.md).
 
-The SPDX SBOM inventories the validated production lockfile; it is not an independent source analysis or provenance attestation. Artifact signatures protect the bundle's hashes but do not identify a trusted key unless the verifier obtains its public key through a trusted channel. Keep release private keys outside the project tree and build worker. Build trusted source in an isolated worker: the current CLI is not a sandbox for hostile project files.
+The compact JWS uses `alg=EdDSA`, `typ=JWT` and a `kid` equal to SHA-256 of the raw Ed25519 public key in unpadded base64url. The key ID and public key are not secrets. The API stores HMAC fingerprints of license keys, access tokens and installation IDs; the private signing key stays outside the executable in KMS. The client stores its access token in a local `0600` file because it must present it for renewal and release.
 
-The lease model accepts a JSON envelope with `payload` and `signature` fields. The payload contains `schema_version: 1`, `algorithm: "Ed25519"`, `key_id`, `product_id`, `release_id`, `installation_id`, `issued_at` and `expires_at`; extra fields are rejected. `key_id` is the lowercase hex SHA-256 hash of the public key, and the trusted-key set maps each key ID to a base64-encoded raw public key. The signature covers compact JSON with this fixed payload field order: `schema_version`, `algorithm`, `key_id`, `product_id`, `release_id`, `installation_id`, `issued_at`, `expires_at`. Unknown keys, missing fields, identity mismatches, malformed signatures, expired leases and lifetimes longer than seven days are rejected. `expires_at` is also capped at seven days from verification time, so clock-skew tolerance cannot extend the offline window. Up to five minutes of future skew is allowed for `issued_at`; no grace is added after expiration. The approved policy revalidates online every 24 hours and permits offline operation for at most seven days from issuance. The model does not perform network access, persist leases, or enforce licensing in a running binary. The client, activation API, revocation behavior and privacy/retention terms remain future work. Keep the server signing key outside generated binaries. No packaging technique can guarantee that embedded PHP source is unrecoverable.
+## Security and operational limits
+
+The build worker is not a sandbox for an untrusted project tree. Remove secrets and user data before packaging, review source and toolchain inputs, and use a dedicated worker with minimal privileges. A bundle signature proves integrity but does not by itself attest to build provenance.
+
+Licensed runtimes require `curl`, `pcntl`, `posix`, `sodium`, an available `proc_open` function and Localzet Server 7+. Run under a dedicated service user when possible. If using `Server::$user`, pre-create the license state for the worker UID and activate as that user. `LOCALZET_LICENSE_DIR` selects the base directory; preserve its path and owner across upgrades.
+
+Local clock changes affect expiry evaluation; signatures do not protect against an administrator who can alter clocks, files or the executable. License enforcement enables remote revocation and raises the cost of bypass, but it does not guarantee anti-tamper protection or prevent PHP source extraction.
 
 ## Architecture decisions
 
-1. **Separate product.** Keep Packager independent from Server and upstream static-php-cli.
-2. **Pinned static-php-cli 2.x backend.** Keep the backend version explicit; verify the produced runtime rather than assuming its extension set.
-3. **Online license revalidation.** Revalidate every 24 hours and allow up to seven days offline after the last successful check using a server-signed lease. Keep private signing keys outside generated binaries. Define and document the activation protocol and privacy/retention terms before deployment.
+1. **Separate products.** Packager and License API are independent from Server and static-php-cli, with separate release lifecycles and key ownership.
+2. **Pinned static-php-cli 2.x.** Check the toolchain version before a build and probe the actual micro runtime.
+3. **Signed online lease.** Revalidate around every 24 hours, renew online and reject leases longer than seven days.
+4. **Key and local state boundaries.** Only the public key ships in the executable. The API's private key stays in KMS; local tokens and leases use owner-only files. Idempotency keys constrain activation retries.
+5. **Installation identity survives upgrades.** State is keyed by `product_id`; renewal signs the current release/version. Starting a changed binary requires connectivity.
 
-## Delivery stages
+## Release readiness
 
-1. **Compatibility:** Linux x86-64 has a current Server 7 build, runtime probe, two-worker HTTP/TLS check and SIGINT shutdown check in a `scratch` container without system libraries. Production certificate loading, ARM64 and network/proxy behavior remain open.
-2. **Build pipeline:** manifest validation, PHAR assembly, pinned tool invocation, SPDX 2.3 SBOM and artifact hashes are implemented. `composer check` validates generated SBOM fixtures against the pinned official SPDX 2.3.1 JSON Schema and rejects a malformed document. Semantic SPDX validation and verification by a separately maintained artifact verifier remain open. Fixture tests cover traversal, symlinks, development dependencies, missing extensions, signature verification and tamper rejection.
-3. **Provenance:** define an attestation format, release-key custody and rotation procedure, independent SPDX validation, and reproducible-build analysis.
-4. **Lease model:** strict Ed25519 lease validation and product/release/installation binding are implemented and covered by local regression tests. Still required: a mock activation API, secure atomic cache, timeout/retry behavior, revocation semantics, runtime enforcement, offline-boundary and clock-rollback tests before building a production API.
-5. **Release:** add artifacts and clean-host tests for every supported target, support and rollback procedures, public documentation and legal review of binary distribution terms.
+Implemented and checked locally: PHAR assembly, metadata and SBOM, detached Ed25519 signatures, strict JWS validation, activation/renew/release client, private state storage, fail-closed startup, graceful expiry shutdown and release-upgrade checks. The License API passed local unit and PostgreSQL integration tests.
 
-Packager is not release-ready until these gates pass on every supported target. A successful build or CI run alone does not prove clean-host compatibility, source protection or license enforcement.
+Before customer release: configure the private Git remote and CI for License API; deploy HTTPS ingress that limits request bodies to 8 KiB before PHP; create the production KMS Ed25519 key and publish its key ID; run real activation/renew/revoke end-to-end checks; validate a clean build using real static-php-cli on Linux x86-64 and supported environments; approve license terms and data retention. Do not claim source extraction is prevented.
