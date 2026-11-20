@@ -565,6 +565,7 @@ PHP
         ]);
         expect($workerExit === 0 && trim($workerOutput) === 'packaged-ok', 'Licensed artifact could not read worker-owned state after dropping privileges: ' . $workerOutput);
     }
+    putenv('LOCALZET_LICENSE_DIR=' . $root . '/active-license-state');
 
     $licenseStore->update(static function (array &$state): void {
         $state['rejected'] = true;
