@@ -135,8 +135,14 @@ try {
     $signatures = new ArtifactSignature();
     $privateKey = $root . '/release-private.key';
     $publicKey = $root . '/release-public.key';
-    $keyId = $signatures->generateKeypair($privateKey, $publicKey);
-    expect((fileperms($privateKey) & 0077) === 0, 'Generated private key is accessible to group or other users.');
+    $previousUmask = umask(0000);
+    try {
+        $keyId = $signatures->generateKeypair($privateKey, $publicKey);
+        expect(umask() === 0000, 'Key generation did not restore the process umask.');
+    } finally {
+        umask($previousUmask);
+    }
+    expect((fileperms($privateKey) & 0777) === 0600, 'Generated private key is not owner-only.');
     expect($keyId === hash('sha256', base64_decode(trim((string)file_get_contents($publicKey)), true)), 'Generated key ID does not match public key.');
 
     $leasePair = sodium_crypto_sign_keypair();
