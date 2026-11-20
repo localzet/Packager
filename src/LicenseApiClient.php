@@ -190,14 +190,12 @@ final class LicenseApiClient
             try {
                 $encodedPayload = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
             } catch (JsonException $exception) {
-                curl_close($handle);
                 throw new LicenseApiException('Could not encode the License API request.', false, previous: $exception);
             }
             $options[CURLOPT_POSTFIELDS] = $encodedPayload;
         }
 
         if (!curl_setopt_array($handle, $options)) {
-            curl_close($handle);
             throw new LicenseApiException('Could not configure the License API request.', false);
         }
 
@@ -206,10 +204,9 @@ final class LicenseApiClient
             $statusCode = (int)curl_getinfo($handle, CURLINFO_RESPONSE_CODE);
             $curlError = curl_error($handle);
         } catch (Throwable $exception) {
-            curl_close($handle);
             throw new LicenseApiException('License API request failed.', true, previous: $exception);
         }
-        curl_close($handle);
+        unset($handle);
 
         if ($result === false) {
             if ($tooLarge) {
