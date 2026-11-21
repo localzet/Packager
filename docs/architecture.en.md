@@ -4,7 +4,7 @@
 
 Packager builds standalone executables for Linux x86-64 from a prepared production Composer graph. It validates the manifest and lockfile, creates a PHAR, probes the actual PHP runtime, and combines it with a pinned static-php-cli version. The output includes metadata, an SPDX 2.3 SBOM and a detached Ed25519 signature bundle.
 
-Licensed builds include the activation client, strict Ed25519 JWS verification, protected file storage and lease enforcement at startup. License API source and migrations live in a separate private GitHub repository, with unit, PostgreSQL and local Packager-to-API integration coverage. Its production endpoint, HTTPS ingress and AWS KMS signing key are not deployed; production binary-to-service exchange remains unverified.
+Licensed builds include the activation client, strict Ed25519 JWS verification, protected file storage and lease enforcement at startup. License API source, migrations and OpenAPI are maintained in a separate private GitHub repository; its unit and PostgreSQL tests and the local Packager-to-API integration pass. The production endpoint, HTTPS ingress, hostname and AWS KMS signing key are not configured, so binary-to-deployed-service exchange remains unverified.
 
 The [compatibility report](compatibility-spike.md) documents a Server 7 x86-64 smoke. Production TLS, ARM64, reproducible builds and independent artifact analysis are outside that check. PHAR does not encrypt PHP code or prevent reverse engineering.
 
