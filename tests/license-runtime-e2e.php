@@ -54,34 +54,35 @@ function runPackagedLicenseRuntimeE2E(string $root, array $manifest, callable $a
     $trustedKeyId = rtrim(strtr(base64_encode(hash('sha256', $public, true)), '+/', '-_'), '=');
     $trustedKeys = [$trustedKeyId => base64_encode($public)];
 
-    $reservation = stream_socket_server('tcp://127.0.0.1:0', $errorCode, $errorMessage);
-    if (!is_resource($reservation)) {
-        throw new RuntimeException('Could not reserve a local License API port: ' . $errorMessage);
-    }
-    $address = (string)stream_socket_get_name($reservation, false);
-    fclose($reservation);
     $readyPath = $directory . '/ready';
     $recordsPath = $directory . '/requests.jsonl';
+    $serverStderrPath = $directory . '/server.stderr';
     $server = proc_open([
         PHP_BINARY,
         __DIR__ . '/fixtures/license-api-https.php',
-        $address,
         $certificate,
         $tlsKey,
         $secretPath,
         $publicPath,
         $recordsPath,
         $readyPath,
-    ], [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'a'], 2 => ['file', '/dev/null', 'a']], $serverPipes);
+    ], [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'a'], 2 => ['file', $serverStderrPath, 'a']], $serverPipes);
     if (!is_resource($server)) {
-        throw new RuntimeException('Could not start the isolated HTTPS License API fixture.');
+        $serverErrors = trim((string)@file_get_contents($serverStderrPath));
+        throw new RuntimeException('Could not start the isolated HTTPS License API fixture.'
+            . ($serverErrors !== '' ? ' stderr: ' . $serverErrors : ''));
     }
     try {
-        $deadline = microtime(true) + 5;
-        while (!is_file($readyPath) && microtime(true) < $deadline) usleep(10_000);
-        $assert(is_file($readyPath) && trim((string)file_get_contents($readyPath)) === 'ready', 'Isolated HTTPS License API did not become ready.');
+        $deadline = microtime(true) + 20;
+        while (!is_file($readyPath) && microtime(true) < $deadline) usleep(20_000);
+        $readyAddress = is_file($readyPath) ? trim((string)file_get_contents($readyPath)) : '';
+        $serverStatus = proc_get_status($server);
+        $serverErrors = trim((string)@file_get_contents($serverStderrPath));
+        $assert(preg_match('/^127\.0\.0\.1:\d+$/D', $readyAddress) === 1 && $serverStatus['running'],
+            'Isolated HTTPS License API failed to become ready: ' . ($readyAddress !== '' ? $readyAddress : 'readiness timeout')
+                . ($serverErrors !== '' ? '; stderr: ' . $serverErrors : ''));
 
-        $manifest['license']['api_url'] = 'https://' . $address;
+        $manifest['license']['api_url'] = 'https://' . $readyAddress;
         $manifest['license']['trusted_keys'] = $trustedKeys;
         $manifest['output'] = 'output/license-runtime-e2e.phar';
         $manifestPath = $root . '/license-runtime-e2e-packager.json';

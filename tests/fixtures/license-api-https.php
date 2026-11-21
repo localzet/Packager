@@ -23,19 +23,24 @@
 
 declare(strict_types=1);
 
-[$script, $address, $certificate, $privateKeyPath, $signingSecretPath, $signingPublicPath, $recordsPath, $readyPath] = $argv;
+[$script, $certificate, $privateKeyPath, $signingSecretPath, $signingPublicPath, $recordsPath, $readyPath] = $argv;
 $context = stream_context_create(['ssl' => [
     'local_cert' => $certificate,
     'local_pk' => $privateKeyPath,
     'verify_peer' => false,
     'allow_self_signed' => true,
 ]]);
-$server = stream_socket_server('tls://' . $address, $errorCode, $errorMessage, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, $context);
+$server = stream_socket_server('tls://127.0.0.1:0', $errorCode, $errorMessage, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, $context);
 if (!is_resource($server)) {
-    file_put_contents($readyPath, $errorMessage);
+    file_put_contents($readyPath, 'ERROR: ' . $errorMessage . ' (' . $errorCode . ')');
     exit(1);
 }
-file_put_contents($readyPath, 'ready');
+$address = stream_socket_get_name($server, false);
+if (!is_string($address)) {
+    file_put_contents($readyPath, 'ERROR: Could not read the bound HTTPS address.');
+    exit(1);
+}
+file_put_contents($readyPath, $address);
 $secretKey = (string)file_get_contents($signingSecretPath);
 $publicKey = (string)file_get_contents($signingPublicPath);
 $keyId = rtrim(strtr(base64_encode(hash('sha256', $publicKey, true)), '+/', '-_'), '=');
