@@ -4,7 +4,7 @@
 
 Packager builds standalone executables for Linux x86-64 from a prepared production Composer graph. It validates the manifest and lockfile, creates a PHAR, probes the actual PHP runtime, and combines it with a pinned static-php-cli version. The output includes metadata, an SPDX 2.3 SBOM and a detached Ed25519 signature bundle.
 
-Licensed builds include the activation client, strict Ed25519 JWS verification, protected file storage and lease enforcement at startup. The separate License API is implemented in a local private checkout and has unit and PostgreSQL integration coverage. It has not been published or deployed: production ingress, hostname, KMS key and end-to-end binary exchange remain unverified.
+Licensed builds include the activation client, strict Ed25519 JWS verification, protected file storage and lease enforcement at startup. License API source, migrations and OpenAPI are maintained in a separate private GitHub repository; its unit and PostgreSQL tests and the local Packager-to-API integration pass. The production endpoint, HTTPS ingress, hostname and AWS KMS signing key are not configured, so binary-to-deployed-service exchange remains unverified.
 
 The [compatibility report](compatibility-spike.md) documents a Server 7 x86-64 smoke. Production TLS, ARM64, reproducible builds and independent artifact analysis are outside that check. PHAR does not encrypt PHP code or prevent reverse engineering.
 
@@ -27,7 +27,7 @@ flowchart LR
   API --> KMS[AWS KMS: Ed25519 private key]
 ```
 
-The License API source, migrations and OpenAPI contract exist locally. No public HTTPS endpoint or production KMS is configured; this diagram describes the intended operational connection, not a live production service.
+The License API source, migrations and OpenAPI contract live in a separate private GitHub repository. Local unit, PostgreSQL and client/API integration tests pass. No production HTTPS endpoint or AWS KMS key is configured; this diagram describes the intended operational connection, not a live production service.
 
 ## C4 containers
 
@@ -73,6 +73,6 @@ Local clock changes affect expiry evaluation; signatures do not protect against 
 
 ## Release readiness
 
-Implemented and checked locally: PHAR assembly, metadata and SBOM, detached Ed25519 signatures, strict JWS validation, activation/renew/release client, private state storage, fail-closed startup, graceful expiry shutdown and release-upgrade checks. The License API passed local unit and PostgreSQL integration tests.
+Implemented and checked locally: PHAR assembly, metadata and SBOM, detached Ed25519 signatures, strict JWS validation, activation/renew/release client, private state storage, fail-closed startup, graceful expiry shutdown and release-upgrade checks. License API source and migrations are maintained in a private GitHub repository; its unit and PostgreSQL integration tests pass, as does the local Packager-to-API integration test.
 
-Before customer release: configure the private Git remote and CI for License API; deploy HTTPS ingress that limits request bodies to 8 KiB before PHP; create the production KMS Ed25519 key and publish its key ID; run real activation/renew/revoke end-to-end checks; validate a clean build using real static-php-cli on Linux x86-64 and supported environments; approve license terms and data retention. Do not claim source extraction is prevented.
+Before customer release: deploy the License API behind HTTPS ingress that limits request bodies to 8 KiB before PHP; provision the production KMS Ed25519 key and pin its public key ID in each licensed build; run activation, renewal and revocation checks against the deployed staging service; validate clean builds with real static-php-cli on Linux x86-64 and other supported environments; approve license terms and data retention. Do not claim source extraction is prevented.

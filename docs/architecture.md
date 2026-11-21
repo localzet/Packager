@@ -4,7 +4,7 @@
 
 Packager собирает автономные исполняемые файлы для Linux x86-64 из подготовленного production Composer-графа. Он проверяет manifest и lockfile, создаёт PHAR, проверяет реальный PHP runtime и объединяет его закреплённой версией static-php-cli. Результат сопровождается metadata, SPDX 2.3 SBOM и отдельной Ed25519-подписью комплекта.
 
-Лицензируемые сборки встраивают API-клиент, строгую проверку Ed25519 JWS, защищённое файловое состояние и контроль lease при запуске. Модуль License API реализован в отдельном приватном локальном checkout и покрыт unit и PostgreSQL integration тестами. Он ещё не опубликован и не развёрнут: production ingress, hostname, KMS key и end-to-end обмен с бинарником не проверены.
+Лицензируемые сборки встраивают API-клиент, строгую проверку Ed25519 JWS, защищённое файловое состояние и контроль lease при запуске. Исходники, миграции и OpenAPI License API хранятся в отдельном приватном GitHub-репозитории; его unit- и PostgreSQL-тесты, а также локальная интеграция API с Packager проходят. Production endpoint, HTTPS ingress, hostname и AWS KMS signing key не настроены, поэтому обмен бинарника с развёрнутым сервисом не проверен.
 
 Подтверждённая совместимость Server 7 для x86-64 описана в [отчёте](compatibility-spike.md). Production TLS, ARM64, воспроизводимые сборки и независимый анализ артефактов остаются за рамками выполненной проверки. PHAR не шифрует PHP-код и не исключает reverse engineering.
 
@@ -27,7 +27,7 @@ flowchart LR
   API --> KMS[AWS KMS: Ed25519 private key]
 ```
 
-License API исходники, миграции и OpenAPI существуют локально. На дату последней проверки публичный HTTPS endpoint и production KMS не настроены; схема показывает целевую эксплуатационную связь, а не действующий production сервис.
+Исходники, миграции и OpenAPI License API находятся в отдельном приватном GitHub-репозитории. Локальные unit-, PostgreSQL- и client/API integration-тесты проходят. Production HTTPS endpoint и AWS KMS key не настроены; схема показывает целевую эксплуатационную связь, а не действующий production-сервис.
 
 ## C4 — контейнеры
 
@@ -73,6 +73,6 @@ Build worker не является sandbox для недоверенного д�
 
 ## Готовность к выпуску
 
-Реализовано и локально проверено: сборка PHAR, metadata и SBOM, detached Ed25519 signatures, строгая проверка JWS, активация/renew/release client, приватный state store, fail-closed startup, graceful expiry shutdown и проверки обновления release. License API проверен локальными unit и PostgreSQL integration тестами.
+Реализовано и локально проверено: сборка PHAR, metadata и SBOM, detached Ed25519 signatures, строгая проверка JWS, активация/renew/release client, приватный state store, fail-closed startup, graceful expiry shutdown и проверки обновления release. License API находится в приватном GitHub-репозитории; его unit- и PostgreSQL integration-тесты проходят, как и локальный Packager-to-API integration-тест.
 
-До клиентского выпуска остаются: настроить приватный Git remote и CI для License API; развернуть HTTPS ingress с ограничением request body до 8 KiB до PHP; создать production KMS Ed25519 key и публичный key ID; провести реальное activation/renew/revoke E2E тестирование; проверить чистую сборку реального static-php-cli на Linux x86-64 и поддерживаемых окружениях; утвердить пользовательские условия лицензии и retention policy. Не считать исходники защищёнными от извлечения.
+До клиентского выпуска остаются: развернуть License API за HTTPS ingress, который ограничивает request body до 8 KiB перед PHP; создать production KMS Ed25519 key и закрепить публичный key ID в лицензируемых сборках; проверить activation/renew/revoke против staging-сервиса; проверить чистую сборку реального static-php-cli на Linux x86-64 и других поддерживаемых окружениях; утвердить пользовательские условия лицензии и retention policy. Не считать исходники защищёнными от извлечения.

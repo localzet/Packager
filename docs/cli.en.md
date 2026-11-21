@@ -53,7 +53,7 @@ Add a `license` object to the manifest when the executable must require online a
 
 The values in `trusted_keys` are placeholders. Obtain them from the License API `signer:public-key` command and verify their source through a trusted channel. The `kid` is SHA-256 of the raw public key encoded as unpadded base64url; the command's `public_key` field uses standard base64. Never put a license key, access token, HMAC secret or signing private key in the manifest.
 
-The licensed target runtime must include `curl`, `pcntl`, `posix` and `sodium`, with `proc_open` enabled. The Composer lock must include Localzet Server 7 or newer. The License API currently exists in a local private checkout only; its production endpoint, ingress and KMS are not configured, so a real service exchange has not been verified.
+The licensed target runtime must include `curl`, `pcntl`, `posix` and `sodium`, with `proc_open` enabled. The Composer lock must include Localzet Server 7 or newer. License API source is maintained in a private GitHub repository, and the client has been tested against the local API. Its production endpoint, HTTPS ingress and AWS KMS key are not configured; do not issue customer licenses until the deployed staging service has been verified.
 
 Activate the executable first. The license key is read from stdin so it is not placed in process arguments or shell history:
 
