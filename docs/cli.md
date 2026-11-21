@@ -55,7 +55,7 @@ composer install --no-dev --no-scripts --no-plugins --prefer-dist --no-interacti
 
 Значения в `trusted_keys` — placeholders. Получите их из команды `signer:public-key` в License API, проверьте источник по доверенному каналу и подставьте в manifest. `kid` — SHA-256 открытого ключа в unpadded base64url; поле `public_key` команды — стандартный base64. Никогда не включайте в manifest license key, access token, HMAC secret или закрытый ключ подписи.
 
-Для лицензированной сборки target runtime должен включать `curl`, `pcntl`, `posix` и `sodium`, а `proc_open` должен быть доступен. Composer lock должен содержать Localzet Server 7 или новее. Проверьте актуальное состояние локального API перед выпуском: пока его production endpoint, ingress и KMS не настроены, конечные лицензии нельзя считать проверенными реальным сервисом.
+Для лицензированной сборки target runtime должен включать `curl`, `pcntl`, `posix` и `sodium`, а `proc_open` должен быть доступен. Composer lock должен содержать Localzet Server 7 или новее. License API находится в приватном GitHub-репозитории; клиент проверен на локальном API, но production endpoint, HTTPS ingress и AWS KMS key ещё не настроены. Не выпускайте клиентские лицензии до проверки развернутого staging-сервиса.
 
 Сначала активируйте бинарник. Ключ подаётся через stdin, чтобы он не оказался в аргументах процесса или shell history:
 
