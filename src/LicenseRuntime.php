@@ -352,7 +352,10 @@ final class LicenseRuntime
     private function recordRenewalFailure(array $state, bool $retryable): void
     {
         $this->store->update(function (array &$current) use ($state, $retryable): void {
-            if ($current['activation_id'] !== $state['activation_id']) {
+            if ($current['activation_id'] !== $state['activation_id']
+                || !is_string($current['access_token'])
+                || !hash_equals($state['access_token'], $current['access_token'])
+            ) {
                 return;
             }
             $current['next_renewal_attempt'] = $retryable ? time() + self::RENEWAL_RETRY_SECONDS : 0;

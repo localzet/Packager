@@ -560,6 +560,29 @@ PHP
     [$activatedExit, $activatedOutput] = $runLicensedArtifact($licensedResult['binary']);
     expect($activatedExit === 0 && trim($activatedOutput) === 'packaged-ok', 'Licensed artifact rejected a valid signed lease: ' . $activatedOutput);
 
+    $renewalSnapshot = [
+        'activation_id' => $runtimeVerifiedLease->activationId(),
+        'access_token' => 'act_' . str_repeat('A', 40),
+    ];
+    $rotatedRenewalRetry = time() + 120;
+    $licenseStore->update(static function (array &$state) use ($rotatedRenewalRetry): void {
+        $state['access_token'] = 'act_' . str_repeat('B', 40);
+        $state['next_renewal_attempt'] = $rotatedRenewalRetry;
+        $state['rejected'] = false;
+    });
+    $recordRenewalFailure = new ReflectionMethod(\Localzet\Packager\LicenseRuntime::class, 'recordRenewalFailure');
+    $recordRenewalFailure->invoke(new \Localzet\Packager\LicenseRuntime($licenseConfig), $renewalSnapshot, true);
+    $recordRenewalFailure->invoke(new \Localzet\Packager\LicenseRuntime($licenseConfig), $renewalSnapshot, false);
+    $afterStaleRenewalFailures = $licenseStore->load();
+    expect($afterStaleRenewalFailures['access_token'] === 'act_' . str_repeat('B', 40)
+        && $afterStaleRenewalFailures['next_renewal_attempt'] === $rotatedRenewalRetry
+        && $afterStaleRenewalFailures['rejected'] === false,
+        'A stale renewal failure changed the state after the access token rotated.');
+    $licenseStore->update(static function (array &$state): void {
+        $state['access_token'] = 'act_' . str_repeat('A', 40);
+        $state['next_renewal_attempt'] = 0;
+    });
+
     if (getenv('PACKAGER_TEST_PRIVILEGED') === '1') {
         $worker = posix_getpwnam('nobody');
         expect(posix_geteuid() === 0 && is_array($worker), 'Privileged worker ownership test requires root and the nobody account.');
