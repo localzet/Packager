@@ -42,6 +42,8 @@ The scratch container used host networking because the fixture binds to loopback
 - Reverse-proxy and arbitrary TCP/UDP behavior in this Packager artifact.
 - Reproducible artifact hash across independent builders.
 - Packager tests validate a generated fixture SBOM against the official [SPDX 2.3.1 JSON Schema](https://github.com/spdx/spdx-spec/blob/6f2cb47d13db19b12c23885573b22ef32ec1ada5/schemas/spdx-schema.json), and reject a malformed document. The schema and validator are pinned in the repository; semantic SPDX validation remains open. Signature tests verify Ed25519 over the executable, metadata and SBOM and reject tampering and symlink substitution; the Packager-built Server bundle was signed and verified by the same CLI, but not by a separate release consumer.
-- License activation, lease expiry/revocation and offline grace.
+- Licensed PHAR startup enforcement is exercised with generated JWS fixtures, but a licensed executable has not been combined with the real static-php-cli runtime.
+- The local License API passes unit and PostgreSQL integration tests, but production KMS, ingress and binary-to-service activation/renewal/release remain unverified.
+- Customer license terms and data-retention policy.
 
-Do not describe the packager as production-ready until these gates and the cases in [architecture readiness](architecture.md#delivery-stages-and-readiness) pass.
+Do not describe the packager as production-ready until these gates and the cases in [architecture readiness](architecture.md#release-readiness) pass.

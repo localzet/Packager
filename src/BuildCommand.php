@@ -137,7 +137,8 @@ final class BuildCommand
     {
         ini_set('phar.readonly', '0');
         try {
-            $phar = new Phar($pharPath, 0, 'application.phar');
+            $archiveAlias = 'application-' . substr(hash('sha256', $pharPath), 0, 16) . '.phar';
+            $phar = new Phar($pharPath, 0, $archiveAlias);
             $phar->startBuffering();
             $root = $manifest->projectRoot();
             $totalBytes = 0;
@@ -178,12 +179,66 @@ final class BuildCommand
             if (!$phar->offsetExists($entrypoint)) {
                 throw new RuntimeException('Project entrypoint was excluded from the PHAR.');
             }
-            $phar->setStub($phar->createDefaultStub($entrypoint));
+            if ($manifest->licenseConfig() === null) {
+                $phar->setStub($phar->createDefaultStub($entrypoint));
+            } else {
+                $this->addLicenseRuntime($phar);
+                $phar->setStub($this->createLicensedStub($manifest->licenseConfig(), $entrypoint, $archiveAlias));
+            }
             $phar->stopBuffering();
         } catch (Throwable $exception) {
             @unlink($pharPath);
             throw $exception;
         }
+    }
+
+    private function addLicenseRuntime(Phar $phar): void
+    {
+        foreach (['LicenseApiException.php', 'LicenseApiClient.php', 'LicenseLease.php', 'LicenseStore.php', 'LicenseRuntime.php'] as $file) {
+            $source = __DIR__ . DIRECTORY_SEPARATOR . $file;
+            if (!is_file($source)) {
+                throw new RuntimeException('License runtime source is missing: ' . $file);
+            }
+            $phar->addFile($source, '__localzet/license/' . $file);
+        }
+    }
+
+    /** @param array{product_id:string,release_id:string,product_version:string,api_url:string,trusted_keys:array<string,string>} $config */
+    private function createLicensedStub(array $config, string $entrypoint, string $archiveAlias): string
+    {
+        $configCode = var_export($config, true);
+        $autoload = var_export('phar://' . $archiveAlias . '/vendor/autoload.php', true);
+        $runtimeFiles = [
+            'LicenseApiException.php',
+            'LicenseApiClient.php',
+            'LicenseLease.php',
+            'LicenseStore.php',
+            'LicenseRuntime.php',
+        ];
+        $requires = '';
+        foreach ($runtimeFiles as $file) {
+            $path = 'phar://' . $archiveAlias . '/__localzet/license/' . $file;
+            $requires .= 'require ' . var_export($path, true) . ";\n";
+        }
+        $applicationEntrypoint = var_export('phar://' . $archiveAlias . '/' . $entrypoint, true);
+
+        return "#!/usr/bin/env php\n<?php\n"
+            . 'Phar::mapPhar(' . var_export($archiveAlias, true) . ");\n"
+            . 'require ' . $autoload . ";\n"
+            . $requires
+            . '$licenseRuntime = new \\Localzet\\Packager\\LicenseRuntime(' . $configCode . ");\n"
+            . "try {\n"
+            . "    \$licenseExitCode = \$licenseRuntime->handleCommand(\$argv);\n"
+            . "    if (\$licenseExitCode !== null) {\n"
+            . "        exit(\$licenseExitCode);\n"
+            . "    }\n"
+            . "    \$licenseRuntime->enforce();\n"
+            . "} catch (Throwable \$exception) {\n"
+            . "    fwrite(STDERR, 'License error: ' . \$exception->getMessage() . PHP_EOL);\n"
+            . "    exit(78);\n"
+            . "}\n"
+            . 'require ' . $applicationEntrypoint . ";\n"
+            . "__HALT_COMPILER();\n";
     }
 
     private function combine(Manifest $manifest, string $pharPath, string $binaryPath): void
@@ -213,11 +268,11 @@ final class BuildCommand
         }
     }
 
-    /** @return array{php:string,extensions:list<string>} */
+    /** @return array{php:string,extensions:list<string>,functions:array<string,bool>} */
     private function assertMicroRuntime(Manifest $manifest, string $probePath): array
     {
         if (!copy($manifest->microPath(), $probePath)
-            || file_put_contents($probePath, "\n<?php echo 'LOCALZET_PACKAGER_RUNTIME=' . json_encode(['php' => PHP_VERSION, 'extensions' => get_loaded_extensions()], JSON_THROW_ON_ERROR); ?>\n", FILE_APPEND) === false
+            || file_put_contents($probePath, "\n<?php echo 'LOCALZET_PACKAGER_RUNTIME=' . json_encode(['php' => PHP_VERSION, 'extensions' => get_loaded_extensions(), 'functions' => ['proc_open' => function_exists('proc_open')]], JSON_THROW_ON_ERROR); ?>\n", FILE_APPEND) === false
         ) {
             throw new RuntimeException('Cannot prepare the micro runtime capability probe.');
         }
@@ -240,9 +295,14 @@ final class BuildCommand
         if ($missingExtensions !== []) {
             throw new RuntimeException('Micro runtime is missing declared extensions: ' . implode(', ', $missingExtensions));
         }
+        $functions = $runtime['functions'] ?? [];
+        if ($manifest->licenseConfig() !== null && (!is_array($functions) || ($functions['proc_open'] ?? false) !== true)) {
+            throw new RuntimeException('Licensed micro runtimes must enable proc_open for non-blocking lease renewal.');
+        }
         return [
             'php' => (string)$runtime['php'],
             'extensions' => array_values($runtime['extensions']),
+            'functions' => is_array($functions) ? $functions : [],
         ];
     }
 

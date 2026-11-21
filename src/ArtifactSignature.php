@@ -245,10 +245,39 @@ final class ArtifactSignature
 
     private function writeExclusive(string $path, string $contents, int $mode): void
     {
-        $handle = @fopen($path, 'x');
+        $restrictAccess = $mode === 0600;
+        $previousUmask = $restrictAccess ? umask(0077) : null;
+        try {
+            $handle = @fopen($path, 'x');
+        } finally {
+            if ($previousUmask !== null) {
+                umask($previousUmask);
+            }
+        }
+
         if (!is_resource($handle)) {
             throw new RuntimeException("Cannot create file without overwriting: {$path}");
         }
+
+        if ($restrictAccess) {
+            $created = fstat($handle);
+            if (!is_array($created)
+                || (($created['mode'] & 0170000) !== 0100000)
+                || (($created['mode'] & 0077) !== 0)
+            ) {
+                fclose($handle);
+                $current = @lstat($path);
+                if (is_array($created)
+                    && is_array($current)
+                    && $current['dev'] === $created['dev']
+                    && $current['ino'] === $created['ino']
+                ) {
+                    @unlink($path);
+                }
+                throw new RuntimeException('Private key file was not created with owner-only permissions.');
+            }
+        }
+
         try {
             $offset = 0;
             $length = strlen($contents);

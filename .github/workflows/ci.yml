@@ -29,3 +29,18 @@ jobs:
         run: composer install --no-interaction --prefer-dist
       - name: Run checks
         run: composer check
+
+  privileged-worker-license:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Setup PHP
+        uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # 2.37.2
+        with:
+          php-version: '8.5'
+          coverage: none
+          tools: composer:v2
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+      - name: Test root master with a worker-owned license state
+        run: sudo -n env PACKAGER_TEST_PRIVILEGED=1 php -d phar.readonly=0 tests/run.php
