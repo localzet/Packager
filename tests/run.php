@@ -24,6 +24,7 @@
 declare(strict_types=1);
 
 require dirname(__DIR__) . '/vendor/autoload.php';
+require __DIR__ . '/license-runtime-e2e.php';
 
 use Localzet\Packager\ArtifactSignature;
 use Localzet\Packager\BuildCommand;
@@ -515,6 +516,9 @@ PHP
         expect($licensedPhar->offsetExists('__localzet/license/LicenseRuntime.php'), 'Licensed archive omitted its runtime enforcement code.');
         expect(str_contains($licensedPhar->getStub(), 'handleCommand'), 'Licensed archive stub omitted its license command handler.');
     }
+    runPackagedLicenseRuntimeE2E($root, $licensedManifest, static function (bool $condition, string $message): void {
+        expect($condition, $message);
+    });
 
     $previousLicenseDirectory = getenv('LOCALZET_LICENSE_DIR');
     $runLicensedArtifact = $usesRealMicro ? 'runExecutable' : 'runArtifact';
